@@ -17,7 +17,8 @@ from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
-                               QPushButton, QSlider, QVBoxLayout, QWidget)
+                               QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget)
+from spot_posture_preview import BodyPosturePreview
 
 
 CAMERA = 'frontleft_fisheye_image'
@@ -196,7 +197,23 @@ class MainWindow(QMainWindow):
         self.camera = QLabel('Waiting for front-left camera')
         self.camera.setMinimumSize(640, 360)
         self.camera.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.camera, 1)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.camera, 'Front-left camera')
+        self.preview = BodyPosturePreview()
+        self.tabs.addTab(self.preview, 'Posture preview')
+        layout.addWidget(self.tabs, 1)
+        self.height = QSlider(Qt.Horizontal)
+        self.height.setRange(0, 10)
+        self.roll = QSlider(Qt.Horizontal)
+        self.roll.setRange(-5, 5)
+        self.pitch = QSlider(Qt.Horizontal)
+        self.pitch.setRange(-5, 5)
+        for title, slider in (('Requested height offset (cm)', self.height),
+                              ('Requested roll (degrees)', self.roll),
+                              ('Requested pitch (degrees)', self.pitch)):
+            layout.addWidget(QLabel(title))
+            layout.addWidget(slider)
+            slider.valueChanged.connect(self.preview_changed)
         controls = QHBoxLayout()
         self.power = QPushButton('Power On')
         self.stand = QPushButton('Stand')
@@ -223,6 +240,7 @@ class MainWindow(QMainWindow):
         self.signals.armed.connect(self.on_armed)
         self.signals.frame.connect(self.show_frame)
         QApplication.instance().installEventFilter(self)
+        self.preview_changed()
         if offline:
             self.power.setEnabled(False)
             self.stop.setEnabled(False)
@@ -241,6 +259,9 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap.fromImage(ImageQt(picture))
         self.camera.setPixmap(pixmap.scaled(self.camera.size(), Qt.KeepAspectRatio,
                                             Qt.SmoothTransformation))
+
+    def preview_changed(self, value=None):
+        self.preview.set_request(self.height.value(), self.roll.value(), self.pitch.value())
 
     def stop_motion(self):
         self.held.clear()
