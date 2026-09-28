@@ -1,0 +1,51 @@
+# Separate SDK checkout, local Python environments, and model bundles
+/spot-sdk/
+/.venv/
+/venv/
+/env/
+/models/
+
+# Local credentials and configuration
+.env
+.env.*
+.envrc
+*credentials*
+*secret*
+*.pem
+*.key
+*.token
+*.p12
+*.pfx
+
+# Runtime output and private camera captures
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+*.log
+/logs/
+/captures/
+/camera-captures/
+/camera_captures/
+/snapshots/
+/screenshots/
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.bmp
+*.webp
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.bag
+*.mcap
+
+# Reviewed documentation captures of the offline application UI
+!docs/illustrative-front-camera-ui.png
+!docs/illustrative-split-screen-ui.png
+!docs/illustrative-posture-ui.png
+!docs/camera-samples/
+!docs/camera-samples/*.png
