@@ -1,16 +1,23 @@
 # Boston Dynamics Spot Control Console (SCOPE)
 
-**SCOPE** expands to **Spot Control, Observation, and Preview Environment**. This independent Python desktop app uses the Spot SDK to display Spot's built-in fisheye cameras and request power, stand, movement, and standing-posture commands. It has an optional depth-assisted gesture mode. The panorama is an uncalibrated front-camera stitch, and the posture diagram is a visual guide to requested offsets, not a prediction of Spot's physical pose. This is not an official or endorsed Boston Dynamics product.
+**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. This Python desktop app displays Spot's built-in fisheye cameras and requests power, stand, movement, and standing-posture commands through the Spot SDK. It also has an optional depth-assisted gesture mode.
+
+The front panorama is an approximate stitch of two cameras. The posture diagram shows requested offsets, not Spot's measured pose. SCOPE is an independent project, not an official or endorsed Boston Dynamics product.
+
+## Contents
 
 - [Install](#install)
 - [Run with the class E-stop](#run-with-the-class-e-stop)
 - [Controls and views](#controls-and-views)
-- [Screenshots](#screenshots)
-- [SDK and model files](#sdk-and-model-files)
+- [Offline demo and screenshots](#offline-demo-and-screenshots)
+- [Future plans](#future-plans)
+- [Contact](#contact)
+- [Licensing and compatibility](#licensing-and-compatibility)
+- [Development history](docs/development-history.md)
 
 ## Install
 
-Use **Python 3.14**, Git, and a local virtual environment. The commands below place the project and the Spot SDK examples in separate folders under your home directory. The project clone URL will work **after this repository is published**. `bosdyn-client` is installed from PyPI; the SDK checkout supplies `estop_nogui.py`.
+Install **Python 3.14** and **Git** first. The commands below keep the project, its virtual environment, and the Spot SDK examples in separate locations. Clone the project once you have access to the repository.
 
 ### macOS Apple Silicon
 
@@ -47,20 +54,24 @@ git clone --branch v5.2.0 --depth 1 https://github.com/boston-dynamics/spot-sdk.
 
 ### Optional gesture models
 
-Gesture mode needs two `.task` files in `models/`. They are **not included in the proposed repository** while their redistribution terms are reviewed. For local use, download the [Gesture Recognizer](https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer#models) and [Pose Landmarker Lite](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker#models) bundles directly from Google's model pages, retaining these filenames:
+Gesture mode needs two local MediaPipe bundles. Download them from Google's model pages and save them with these names under `models/`:
 
-```text
-models/gesture_recognizer.task
-models/pose_landmarker_lite.task
-```
+| Download | Local filename |
+| --- | --- |
+| [Gesture Recognizer](https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer#models) | `gesture_recognizer.task` |
+| [Pose Landmarker Lite](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker#models) | `pose_landmarker_lite.task` |
 
-The rest of the GUI can launch without these files; enabling gesture mode will fail if they are missing.
+The rest of the GUI runs without them; gesture mode cannot start if they are missing. The bundles are excluded from this repository while their redistribution terms are reviewed.
 
 ## Run with the class E-stop
 
-Connect the computer to Spot's network and **confirm the robot IP with your instructor**. `192.168.80.3` is the class handout example; replace it in both launch commands if your instructor gives a different IP. Run the SDK's class E-stop in one Terminal and keep it open while using the GUI in another. The SDK authentication helper prompts for credentials when needed. Enter them in the Terminal prompt; do not put them in source files or documentation.
+1. Connect the computer to Spot's network and **confirm the robot IP with your instructor**. The commands use the class handout example `192.168.80.3`; replace it in both commands if needed.
+2. Start the SDK's class E-stop in one Terminal and keep it open.
+3. Start the GUI in a second Terminal. Enter credentials only when the SDK prompts in Terminal.
 
-**macOS — first Terminal, E-stop:**
+### macOS
+
+**Terminal 1 — class E-stop**
 
 ```sh
 cd "$HOME/boston-dynamics-spot-control-console"
@@ -68,7 +79,7 @@ source .venv/bin/activate
 python "$HOME/spot-sdk/python/examples/estop/estop_nogui.py" 192.168.80.3
 ```
 
-**macOS — second Terminal, GUI:**
+**Terminal 2 — GUI**
 
 ```sh
 cd "$HOME/boston-dynamics-spot-control-console"
@@ -76,7 +87,9 @@ source .venv/bin/activate
 python spot_control_gui.py --hostname 192.168.80.3
 ```
 
-**Windows — first PowerShell window, E-stop:**
+### Windows
+
+**PowerShell 1 — class E-stop**
 
 ```powershell
 Set-Location "$HOME\boston-dynamics-spot-control-console"
@@ -84,7 +97,7 @@ Set-Location "$HOME\boston-dynamics-spot-control-console"
 python "$HOME\spot-sdk\python\examples\estop\estop_nogui.py" 192.168.80.3
 ```
 
-**Windows — second PowerShell window, GUI:**
+**PowerShell 2 — GUI**
 
 ```powershell
 Set-Location "$HOME\boston-dynamics-spot-control-console"
@@ -92,24 +105,76 @@ Set-Location "$HOME\boston-dynamics-spot-control-console"
 python spot_control_gui.py --hostname 192.168.80.3
 ```
 
-In the E-stop Terminal, **Space** triggers the E-stop, **r** releases it, and **q** quits. Follow the instructor's operating procedure. The GUI's **STOP MOVEMENT** button requests zero velocity; it does not operate the class E-stop.
+In the E-stop Terminal, **Space** triggers the E-stop, **r** releases it, and **q** quits. Follow your instructor's operating procedure. The GUI's **STOP MOVEMENT** button requests zero velocity; it does not operate the class E-stop.
 
 ## Controls and views
 
-- **Camera tabs:** Each available built-in fisheye source gets a tab. **Split screen** shows the available feeds together. Each view indicates loading, receiving images, or stopped after a connection error. The code does not require Spot CAM or another payload camera.
-- **Panorama:** **Continuously update** is on by default and requests a new front-left/front-right stitch about every two seconds; uncheck it to pause or use **Stitch current front frames once**. Stitching runs off the UI thread with bounded image sizes. OpenCV alignment can fail or distort a scene; this is not calibrated or a 360° view. Individual feeds continue after a stitch failure. Drag to pan and use the wheel to zoom. Stitching pauses during gesture mode.
-- **Movement:** Use **Power On** if needed, then **Stand**. Hold **W/A/S/D** or the arrow keys to move forward, left, backward, or right. The **Speed limit** slider requests **0.05–0.35 m/s**, with **0.20 m/s** as the initial value. Diagonal input is normalized to the same speed cap. Releasing a movement key requests zero velocity; motion commands expire after **0.35 seconds** without updates.
-- **Stop:** **STOP MOVEMENT** clears held keys, disables gesture mode, and requests zero velocity when powered. The app also requests zero velocity on focus loss, connection failure, and exit. Stop does not power Spot off.
-- **Posture preview:** The box shows requested body offsets relative to nominal stand; it has no leg or foot model and is not to scale. Moving a slider changes only the preview. **Apply requested standing posture** sends a stand request only when fresh robot state reports standing and near-zero body velocity, with no movement or gesture input active. Requested height is **0 to +10 cm** in 1 cm steps; roll and pitch are each **−5° to +5°** in 1° steps. These are app request limits, not physical guarantees. A 1 cm request may not cause 1 cm of movement. Driving or Stop can return roll and pitch to nominal.
-- **Supervised gesture mode:** After **Stand**, this optional mode uses the front-left visual feed and aligned depth source; it disables keyboard driving. Hold an open palm for at least **0.5 s** to arm, then hold one raised index finger or two raised fingers for at least **0.6 s**. One finger requests a forward approach at up to **0.10 m/s** while valid person and depth observations remain farther than **2.5 m**. Two fingers request a backup at up to **0.10 m/s** for at most **0.5 s**. Show an open palm again before another command. Missing or stale observations, unclear signals, focus loss, or Stop cancel motion. Image recognition and depth measurement can be wrong; keep the class E-stop available.
+### Cameras and panorama
 
-The installed SDK is **5.2.0**. Its [command builder documentation](https://dev.bostondynamics.com/python/bosdyn-client/src/bosdyn/client/robot_command.html) defines `body_height` as relative to nominal stand height, and its [programming tutorial](https://dev.bostondynamics.com/docs/python/understanding_spot_programming.html) demonstrates a +0.1 m request. The SDK Xbox controller example clamps height at ±0.30 m, but that is an example constant, not a verified safe physical range. No safe lowering bound was verified for this robot. Boston Dynamics' [front stitching example](https://dev.bostondynamics.com/python/examples/stitch_front_images/readme) uses the two front sources and calibration; this app's OpenCV stitch remains approximate.
+| View | What it shows |
+| --- | --- |
+| Camera tabs | One tab per available built-in fisheye feed. |
+| Split screen | The available built-in feeds together. |
+| Front panorama | An approximate stitch of the front-left and front-right feeds. Drag to pan and use the wheel to zoom. |
 
-Run `python spot_control_gui.py --demo` for an offline view of the full console. Demo mode creates no robot client, authenticates no user, acquires no lease, and sends no network request or robot command. Its five camera scenes are original, static grayscale test artwork with visible **SIMULATED** labels. The demo panorama is a known-overlap simulated composite for UI review; it does not validate live feature stitching. Power On, Stand, Apply, and gesture control stay disabled. The older `--offline-preview` option remains available for a posture-only view.
+Camera tabs report when they are loading, receiving images, or stopped after a connection error. They do not require Spot CAM or another payload camera.
 
-## Screenshots
+**Continuously update** requests a new stitch about every two seconds and is on by default. Turn it off to pause, or select **Stitch current front frames once**. Stitching runs off the UI thread and pauses during gesture mode.
 
-The screenshots below show the actual application window in offline demo mode. Their original grayscale camera imagery was generated for this documentation and was not captured from Spot.
+OpenCV may fail to align the frames or distort the scene. The result is neither calibrated nor a 360° view; individual feeds continue after a stitch failure. See Boston Dynamics' [calibrated front-stitching example](https://dev.bostondynamics.com/python/examples/stitch_front_images/readme) for comparison.
+
+### Drive and stop
+
+| Control | Action |
+| --- | --- |
+| **Power On**, then **Stand** | Prepare Spot for movement if it is not already powered and standing. |
+| Hold **W/A/S/D** or arrow keys | Move forward, left, backward, or right. Diagonal input stays within the same speed cap. |
+| **Speed limit** | Requests 0.05–0.35 m/s; starts at 0.20 m/s. |
+| **STOP MOVEMENT** | Clears held keys, disables gesture mode, and requests zero velocity when powered. It does not power Spot off. |
+
+Releasing a movement key requests zero velocity. Motion commands expire after **0.35 seconds** without updates. The app also requests zero velocity on focus loss, connection failure, and exit.
+
+### Standing-posture preview
+
+The diagram shows requested body offsets from nominal stand. It has no leg or foot model and is not to scale. Moving a slider changes only the preview.
+
+| Request | App range | Step |
+| --- | --- | --- |
+| Height offset | 0 to +10 cm | 1 cm |
+| Roll | −5° to +5° | 1° |
+| Pitch | −5° to +5° | 1° |
+
+**Apply requested standing posture** sends a stand request only when fresh robot state reports standing and near-zero body velocity, with no movement or gesture input active. These are app request limits, not physical guarantees: a 1 cm request may not move Spot by 1 cm. Driving or Stop can return roll and pitch to nominal.
+
+The SDK defines [body height relative to nominal stand height](https://dev.bostondynamics.com/python/bosdyn-client/src/bosdyn/client/robot_command.html), and its [programming tutorial](https://dev.bostondynamics.com/docs/python/understanding_spot_programming.html) shows a +0.1 m request. The SDK Xbox example's ±0.30 m clamp is an example constant, not a verified safe range. No safe lowering bound was verified for this robot.
+
+### Supervised gesture mode
+
+Enable this mode after **Stand**. It uses the front-left visual feed and aligned depth source, and disables keyboard driving.
+
+| Signal | Hold for | Request |
+| --- | --- | --- |
+| Open palm | At least 0.5 s | Arm or rearm gesture mode. |
+| One raised index finger | At least 0.6 s | Approach at up to 0.10 m/s while valid person and depth readings remain farther than 2.5 m. |
+| Two raised fingers | At least 0.6 s | Back up at up to 0.10 m/s for at most 0.5 s. |
+
+Show an open palm again before another command. Missing or stale observations, unclear signals, focus loss, or Stop cancel motion. Recognition and depth measurement can be wrong; keep the class E-stop available.
+
+## Offline demo and screenshots
+
+Run the full console without a robot:
+
+```sh
+python spot_control_gui.py --demo
+```
+
+Demo mode creates no robot client, authentication, lease, network request, or robot command.
+
+- Five static grayscale scenes have **SIMULATED** labels. The demo panorama has known overlap for UI review; it does not validate live stitching.
+- **Power On**, **Stand**, **Apply**, and gesture control stay disabled.
+- Use `--offline-preview` for the older posture-only view.
+
+These screenshots show the actual app window in offline demo mode. The original grayscale camera imagery was generated for this documentation and was **not captured from Spot**.
 
 ![Offline demo front-left camera tab with illustrative lab scene](docs/illustrative-front-camera-ui.png)
 
@@ -117,8 +182,25 @@ The screenshots below show the actual application window in offline demo mode. T
 
 ![Offline demo posture preview](docs/illustrative-posture-ui.png)
 
-## SDK and model files
+## Future plans
 
-The Spot SDK checkout and virtual environment are excluded from this repository. Boston Dynamics' [SDK license](https://github.com/boston-dynamics/spot-sdk/blob/master/LICENSE) requires its full license and retained notices when SDK files are redistributed, and restricts trademark use that implies endorsement. The local MediaPipe model bundles are also excluded until their redistribution terms are confirmed. SCOPE's original project files are available under the [MIT License](LICENSE); that license does not cover the Spot SDK or third-party model bundles.
+These are ideas for future work, not features in the current app.
+
+| Area | Direction |
+| --- | --- |
+| Voice input | Connect a microphone for spoken commands. |
+| Wearable interfaces | Explore control or viewing through VR headsets or Meta Ray-Ban smart glasses. |
+| Emotion-aware interaction | Investigate visual cues for human emotion recognition. |
+| Recognition and personalities | Explore opt-in facial recognition and distinct interaction personalities for known people. |
+
+## Contact
+
+For ideas or questions, email [monishsaravana@college.harvard.edu](mailto:monishsaravana@college.harvard.edu).
+
+## Licensing and compatibility
+
+- The Spot SDK checkout and virtual environment are excluded. Boston Dynamics' [SDK license](https://github.com/boston-dynamics/spot-sdk/blob/master/LICENSE) requires its full license and retained notices if SDK files are redistributed, and restricts trademark use that implies endorsement.
+- The local MediaPipe model bundles are excluded until their redistribution terms are confirmed.
+- SCOPE's original files use the [MIT License](LICENSE); it does not cover the SDK or third-party model bundles.
 
 **Compatibility:** macOS Apple Silicon offline UI checked with Python 3.14.2; Windows and Linux not tested. Live robot operation has not been validated for this publication.
