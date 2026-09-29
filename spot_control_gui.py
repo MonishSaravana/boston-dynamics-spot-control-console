@@ -19,12 +19,13 @@ from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.geometry import EulerZXY
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QEvent, QObject, QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QApplication, QCheckBox, QGridLayout, QHBoxLayout, QLabel,
-                               QGraphicsScene, QGraphicsView, QMainWindow,
-                               QPushButton, QSlider, QTabWidget, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QFrame, QGridLayout, QHBoxLayout,
+                               QLabel, QGraphicsScene, QGraphicsView, QMainWindow,
+                               QPushButton, QScrollArea, QSizePolicy, QSlider, QTabWidget,
+                               QVBoxLayout, QWidget)
+from spot_demo import make_demo_frames, make_demo_panorama
 from spot_gesture import GestureGate, GestureVision, Observation
 
 
@@ -49,6 +50,40 @@ KEYS = {Qt.Key_W: (1, 0), Qt.Key_Up: (1, 0),
         Qt.Key_S: (-1, 0), Qt.Key_Down: (-1, 0),
         Qt.Key_A: (0, 1), Qt.Key_Left: (0, 1),
         Qt.Key_D: (0, -1), Qt.Key_Right: (0, -1)}
+
+GUI_STYLE = """
+QMainWindow, QWidget#root { background: #f2f5f7; color: #172735; }
+QFrame#header, QFrame#surface, QFrame#controlPanel, QFrame#statusBar {
+    background: #ffffff; border: 1px solid #dce3e8; border-radius: 10px;
+}
+QLabel#appTitle { color: #162b39; font-size: 20px; font-weight: 700; }
+QLabel#sectionTitle { color: #162b39; font-size: 15px; font-weight: 700; }
+QLabel#muted { color: #526574; font-size: 12px; }
+QLabel#stateTitle { color: #162b39; font-weight: 700; }
+QLabel#cameraStatus { color: #526574; font-size: 12px; }
+QFrame#stateDot { border: none; border-radius: 5px; background: #9aa8b2; }
+QPushButton { background: #ffffff; color: #172735; border: 1px solid #becbd4;
+              border-radius: 6px; padding: 9px 12px; font-weight: 600; }
+QPushButton:hover { background: #ecf4f5; border-color: #0b747b; }
+QPushButton:focus { border: 2px solid #0b747b; }
+QPushButton:disabled { color: #8998a2; background: #f2f4f5; border-color: #e2e7ea; }
+QPushButton#stopButton { background: #ae2630; border-color: #91202a; color: white;
+                         font-size: 15px; font-weight: 700; padding: 13px 18px; }
+QPushButton#stopButton:hover { background: #951e28; }
+QPushButton#stopButton:focus { border: 2px solid #172735; }
+QPushButton#applyButton { background: #0b747b; border-color: #08626a; color: white; }
+QPushButton#applyButton:hover { background: #08626a; }
+QPushButton#applyButton:disabled { background: #dce7e8; border-color: #dce7e8;
+                                  color: #71878a; }
+QTabWidget::pane { border: 1px solid #dce3e8; background: #ffffff; }
+QTabBar::tab { background: #edf2f4; color: #405563; padding: 9px 13px;
+               border: 1px solid #dce3e8; border-bottom: none; }
+QTabBar::tab:selected { background: #ffffff; color: #0b6871; font-weight: 700; }
+QTabBar::tab:hover:!selected { background: #dfe9eb; }
+QScrollArea { border: none; background: transparent; }
+QCheckBox { color: #172735; spacing: 8px; }
+QSlider { min-height: 22px; }
+"""
 
 
 def decode_visual_image(image):
@@ -190,10 +225,15 @@ class SpotSession:
         self.panorama_requested.set()
 
     def _panorama_loop(self):
+        cv2.setNumThreads(2)
+        last_stitch_finished = 0.0
         while not self.closing.is_set():
             if not self.panorama_requested.wait(0.2):
                 continue
             self.panorama_requested.clear()
+            cooldown = PANORAMA_PERIOD - (time.monotonic() - last_stitch_finished)
+            if cooldown > 0 and self.closing.wait(cooldown):
+                break
             with self.lock:
                 gesture_active = self.gesture_mode
                 images = [self.latest_frames.get(source) for source in FRONT_PAIR]
@@ -207,20 +247,31 @@ class SpotSession:
             self.signals.panorama_status.emit('Stitching front cameras…')
             try:
                 greyscale = all(image.mode == 'L' for image in images)
-                frames = [cv2.cvtColor(np.asarray(image.convert('RGB')), cv2.COLOR_RGB2BGR)
-                          for image in images]
+                frames = []
+                for image in images:
+                    small = image.copy()
+                    small.thumbnail((640, 420))
+                    frames.append(cv2.cvtColor(np.asarray(small.convert('RGB')),
+                                               cv2.COLOR_RGB2BGR))
                 status, panorama = cv2.Stitcher_create(cv2.Stitcher_PANORAMA).stitch(frames)
                 if status != cv2.Stitcher_OK or panorama is None:
                     self.signals.panorama_status.emit(
                         'Could not align front frames; individual feeds continue')
                     continue
+                if panorama.shape[0] * panorama.shape[1] > 3_000_000:
+                    self.signals.panorama_status.emit(
+                        'Stitch exceeded preview size; individual feeds continue')
+                    continue
                 picture = Image.fromarray(cv2.cvtColor(panorama, cv2.COLOR_BGR2RGB))
+                picture.thumbnail((1600, 700))
                 if greyscale:
                     picture = picture.convert('L')
                 self.signals.panorama.emit(picture)
                 self.signals.panorama_status.emit('Front panorama updated (approximate, not calibrated)')
             except Exception as exc:
                 self.signals.panorama_status.emit(f'Stitching unavailable: {exc}')
+            finally:
+                last_stitch_finished = time.monotonic()
 
     def close(self):
         self.closing.set()
@@ -515,6 +566,32 @@ class SpotSession:
                 return
 
 
+class CameraImageLabel(QLabel):
+    """Keep the full source frame visible when a camera tile is resized."""
+
+    def __init__(self, minimum_size):
+        super().__init__()
+        self.setMinimumSize(*minimum_size)
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet('background: #15212a; color: #d9e4e8; border-radius: 5px;')
+        self._source_pixmap = None
+
+    def set_picture(self, picture):
+        self._source_pixmap = (picture if isinstance(picture, QPixmap) else
+                               QPixmap.fromImage(ImageQt(picture)))
+        self._refresh()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh()
+
+    def _refresh(self):
+        if self._source_pixmap is not None and self.width() > 0 and self.height() > 0:
+            self.setPixmap(self._source_pixmap.scaled(self.size(), Qt.KeepAspectRatio,
+                                                      Qt.SmoothTransformation))
+
+
 class PanoramaView(QGraphicsView):
     """Pan and zoom a stitched snapshot with the mouse wheel and drag."""
 
@@ -525,6 +602,8 @@ class PanoramaView(QGraphicsView):
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setBackgroundBrush(Qt.black)
         self.pixmap_item = None
+        message = self.scene.addText('Waiting for front camera frames and alignment…')
+        message.setDefaultTextColor(QColor('#d9e4e8'))
 
     def set_picture(self, picture):
         pixmap = QPixmap.fromImage(ImageQt(picture))
@@ -545,7 +624,7 @@ class BodyPosturePreview(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(460, 300)
+        self.setMinimumSize(400, 240)
         self.height_cm = self.roll_deg = self.pitch_deg = 0
 
     def set_request(self, height_cm, roll_deg, pitch_deg):
@@ -600,11 +679,16 @@ class BodyPosturePreview(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, hostname, offline=False):
+    def __init__(self, hostname, offline=False, demo=False):
         super().__init__()
-        self.setWindowTitle('Spot control — OFFLINE PREVIEW' if offline else f'Spot control — {hostname}')
-        self.resize(950, 760)
-        self.offline = offline
+        self.setWindowTitle('Spot Control Console — DEMO' if demo else
+                            'Spot Control Console — OFFLINE PREVIEW' if offline else
+                            f'Spot Control Console — {hostname}')
+        self.resize(1240, 820)
+        self.setMinimumSize(980, 680)
+        self.setStyleSheet(GUI_STYLE)
+        self.offline = offline or demo
+        self.demo = demo
         self.signals = UiSignals()
         self.session = SpotSession(hostname, self.signals)
         self.pressed = set()
@@ -613,32 +697,126 @@ class MainWindow(QMainWindow):
         self.failed = False
         self.feed_labels = {}
         self.split_labels = {}
+        self.feed_status = {}
+        self.split_status = {}
 
         root = QWidget()
+        root.setObjectName('root')
         layout = QVBoxLayout(root)
-        self.status = QLabel('OFFLINE PREVIEW — no robot connection or camera footage' if offline
-                             else 'Starting connection…')
-        layout.addWidget(self.status)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        header = QFrame()
+        header.setObjectName('header')
+        header_row = QHBoxLayout(header)
+        header_row.setContentsMargins(18, 12, 18, 12)
+        heading = QVBoxLayout()
+        app_title = QLabel('Spot Control Console')
+        app_title.setObjectName('appTitle')
+        heading.addWidget(app_title)
+        sub = QLabel('Built-in cameras, keyboard drive, and standing posture')
+        sub.setObjectName('muted')
+        heading.addWidget(sub)
+        header_row.addLayout(heading, 1)
+        self.stop = QPushButton('STOP MOVEMENT')
+        self.stop.setObjectName('stopButton')
+        self.stop.setMinimumWidth(205)
+        self.stop.setToolTip('Immediately request zero velocity and clear held keys and gesture mode. '
+                             'The separate class E-stop remains required.')
+        self.stop.clicked.connect(self.stop_motion)
+        header_row.addWidget(self.stop)
+        layout.addWidget(header)
+
+        status_bar = QFrame()
+        status_bar.setObjectName('statusBar')
+        status_row = QHBoxLayout(status_bar)
+        status_row.setContentsMargins(16, 9, 16, 9)
+        self.state_dot = QFrame()
+        self.state_dot.setObjectName('stateDot')
+        self.state_dot.setFixedSize(10, 10)
+        status_row.addWidget(self.state_dot)
+        status_text = QVBoxLayout()
+        status_text.setSpacing(2)
+        self.state_title = QLabel()
+        self.state_title.setObjectName('stateTitle')
+        status_text.addWidget(self.state_title)
+        self.status = QLabel()
+        self.status.setObjectName('muted')
+        self.status.setWordWrap(True)
+        status_text.addWidget(self.status)
+        status_row.addLayout(status_text, 1)
+        estop = QLabel('Keep the class E-stop open in a separate Terminal')
+        estop.setObjectName('muted')
+        estop.setWordWrap(True)
+        estop.setMaximumWidth(245)
+        status_row.addWidget(estop)
+        layout.addWidget(status_bar)
+
+        content = QHBoxLayout()
+        content.setSpacing(12)
+        camera_surface = QFrame()
+        camera_surface.setObjectName('surface')
+        camera_layout = QVBoxLayout(camera_surface)
+        camera_layout.setContentsMargins(16, 14, 16, 16)
+        camera_layout.setSpacing(8)
+        camera_title = QLabel('Cameras & preview')
+        camera_title.setObjectName('sectionTitle')
+        camera_layout.addWidget(camera_title)
+        camera_intro = QLabel('Choose one built-in fisheye feed, all feeds, a front stitch, or the standing posture preview.')
+        camera_intro.setObjectName('muted')
+        camera_intro.setWordWrap(True)
+        camera_layout.addWidget(camera_intro)
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
+        self.tabs.setDocumentMode(True)
+        camera_layout.addWidget(self.tabs, 1)
+        content.addWidget(camera_surface, 1)
+
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        controls_scroll.setMinimumWidth(298)
+        controls_scroll.setMaximumWidth(330)
+        control_panel = QFrame()
+        control_panel.setObjectName('controlPanel')
+        control_layout = QVBoxLayout(control_panel)
+        control_layout.setContentsMargins(18, 16, 18, 16)
+        control_layout.setSpacing(10)
+        controls_scroll.setWidget(control_panel)
+        content.addWidget(controls_scroll)
+        layout.addLayout(content, 1)
 
         posture_page = QWidget()
+        self.posture_page = posture_page
+        posture_page.setMinimumHeight(500)
         posture_layout = QVBoxLayout(posture_page)
+        posture_layout.setContentsMargins(18, 16, 18, 16)
+        posture_layout.setSpacing(9)
+        posture_heading = QLabel('Standing body posture')
+        posture_heading.setObjectName('sectionTitle')
+        posture_layout.addWidget(posture_heading)
+        posture_intro = QLabel('Preview requested body offsets. This diagram is descriptive, not a validated physical pose.')
+        posture_intro.setObjectName('muted')
+        posture_intro.setWordWrap(True)
+        posture_layout.addWidget(posture_intro)
         self.posture_preview = BodyPosturePreview()
         posture_layout.addWidget(self.posture_preview, 1)
-        posture_layout.addWidget(QLabel(
-            'Requested body offset from nominal stand. Diagram only; actual pose may be limited by Spot.'))
         height_row = QHBoxLayout()
-        height_row.addWidget(QLabel('Height offset:'))
+        height_row.addWidget(QLabel('Body height offset'))
         self.height = QSlider(Qt.Horizontal)
         self.height.setRange(0, HEIGHT_LIMIT_CM)
         self.height.setValue(0)
         self.height.setFocusPolicy(Qt.NoFocus)
+        self.height.setToolTip('Requested height relative to nominal standing height, in 1 cm steps. '
+                               'Spot may limit the actual movement. No verified safe lowering range is available.')
         self.height.valueChanged.connect(self.posture_changed)
         height_row.addWidget(self.height, 1)
         self.height_label = QLabel('requested +0 cm')
         height_row.addWidget(self.height_label)
         posture_layout.addLayout(height_row)
+        height_note = QLabel('0 to +10 cm is an app request limit. A 1 cm step does not guarantee 1 cm of movement.')
+        height_note.setObjectName('muted')
+        height_note.setWordWrap(True)
+        posture_layout.addWidget(height_note)
         self.roll = QSlider(Qt.Horizontal)
         self.pitch = QSlider(Qt.Horizontal)
         self.roll_label = QLabel()
@@ -646,65 +824,97 @@ class MainWindow(QMainWindow):
         for title, slider, label in [('Roll', self.roll, self.roll_label),
                                      ('Pitch', self.pitch, self.pitch_label)]:
             row = QHBoxLayout()
-            row.addWidget(QLabel(title + ' offset:'))
+            row.addWidget(QLabel(title + ' offset'))
             slider.setRange(-TILT_LIMIT_DEG, TILT_LIMIT_DEG)
             slider.setValue(0)
             slider.setFocusPolicy(Qt.NoFocus)
+            slider.setToolTip(f'Requested standing body {title.lower()} angle in degrees, '
+                              'limited to ±5° by this app. It is not a validated pose.')
             slider.valueChanged.connect(self.posture_changed)
             row.addWidget(slider, 1)
             row.addWidget(label)
             posture_layout.addLayout(row)
         self.apply_button = QPushButton('Apply requested standing posture')
+        self.apply_button.setObjectName('applyButton')
         self.apply_button.setEnabled(False)
+        self.apply_button.setToolTip('Send one high-level stand request only after Spot is powered, '
+                                     'standing, stationary, and manual or gesture movement is inactive.')
         self.apply_button.clicked.connect(self.apply_requested_posture)
         posture_layout.addWidget(self.apply_button)
         self.posture_message = QLabel(
             'Preview only. Apply requires a stationary, powered, standing Spot.')
         self.posture_message.setWordWrap(True)
         posture_layout.addWidget(self.posture_message)
-        self.tabs.addTab(posture_page, 'Posture preview')
+        posture_scroll = QScrollArea()
+        posture_scroll.setWidgetResizable(True)
+        posture_scroll.setWidget(posture_page)
+        self.tabs.addTab(posture_scroll, 'Posture preview')
+        self.tabs.setTabToolTip(0, 'Preview requested standing body height, roll, and pitch; Apply is separate.')
         self.posture_changed()
 
-        controls = QHBoxLayout()
+        ready_title = QLabel('Readiness')
+        ready_title.setObjectName('sectionTitle')
+        control_layout.addWidget(ready_title)
+        ready_note = QLabel('Connect, power on if needed, then Stand. Keyboard driving stays locked until Stand.')
+        ready_note.setObjectName('muted')
+        ready_note.setWordWrap(True)
+        control_layout.addWidget(ready_note)
         self.power = QPushButton('Power On')
+        self.power.setToolTip('Power Spot motors on after connecting. This does not make Spot stand or drive.')
         self.power.clicked.connect(lambda: self.session.action('power'))
-        controls.addWidget(self.power)
+        control_layout.addWidget(self.power)
         self.stand = QPushButton('Stand')
+        self.stand.setToolTip('Request a high-level stand command. Keyboard driving unlocks after the command is sent.')
         self.stand.clicked.connect(lambda: self.session.action('stand'))
-        controls.addWidget(self.stand)
-        self.stop = QPushButton('STOP — zero velocity')
-        self.stop.setStyleSheet('background: #c83131; color: white; font-weight: bold; padding: 12px;')
-        self.stop.clicked.connect(self.stop_motion)
-        controls.addWidget(self.stop, 1)
-        layout.addLayout(controls)
+        control_layout.addWidget(self.stand)
+        control_layout.addSpacing(8)
 
-        gesture_row = QHBoxLayout()
-        self.gesture_toggle = QCheckBox('Enable supervised gesture mode')
-        self.gesture_toggle.setEnabled(False)
-        self.gesture_toggle.toggled.connect(self.toggle_gesture_mode)
-        gesture_row.addWidget(self.gesture_toggle)
-        self.gesture_indicator = QLabel('GESTURE MODE OFF')
-        self.gesture_indicator.setStyleSheet('color: #b22; font-weight: bold;')
-        gesture_row.addWidget(self.gesture_indicator, 1)
-        layout.addLayout(gesture_row)
-
-        speed_row = QHBoxLayout()
-        speed_row.addWidget(QLabel('Movement speed:'))
+        drive_title = QLabel('Keyboard movement')
+        drive_title.setObjectName('sectionTitle')
+        control_layout.addWidget(drive_title)
+        drive_note = QLabel('Hold W / ↑ forward, S / ↓ back, A / ← left, D / → right. Release to stop.')
+        drive_note.setObjectName('muted')
+        drive_note.setWordWrap(True)
+        drive_note.setToolTip('Direction keys work after Stand. Releasing every key sends zero velocity; '
+                               'focus loss and app exit also request zero velocity.')
+        control_layout.addWidget(drive_note)
+        speed_heading = QHBoxLayout()
+        speed_heading.addWidget(QLabel('Speed limit'))
+        self.speed_label = QLabel(f'{DEFAULT_SPEED:.2f} m/s')
+        speed_heading.addWidget(self.speed_label, 1, Qt.AlignRight)
+        control_layout.addLayout(speed_heading)
         self.speed = QSlider(Qt.Horizontal)
         self.speed.setRange(5, int(MAX_SPEED * 100))
         self.speed.setValue(int(DEFAULT_SPEED * 100))
         self.speed.setFocusPolicy(Qt.NoFocus)
+        self.speed.setToolTip('Requested keyboard driving speed in meters per second, '
+                              'from 0.05 to 0.35 m/s. Diagonal movement is normalized.')
         self.speed.valueChanged.connect(self.speed_changed)
-        speed_row.addWidget(self.speed, 1)
-        self.speed_label = QLabel(f'{DEFAULT_SPEED:.2f} m/s')
-        speed_row.addWidget(self.speed_label)
-        layout.addLayout(speed_row)
-        layout.addWidget(QLabel('Hold WASD or arrow keys to drive. Release to stop. '
-                                'Posture changes require Apply while stationary. Keep class E-stop open.'))
+        control_layout.addWidget(self.speed)
+        speed_note = QLabel('0.05–0.35 m/s • commands expire after 0.35 s')
+        speed_note.setObjectName('muted')
+        control_layout.addWidget(speed_note)
+        control_layout.addSpacing(8)
+
+        gesture_title = QLabel('Supervised gesture mode')
+        gesture_title.setObjectName('sectionTitle')
+        control_layout.addWidget(gesture_title)
+        self.gesture_toggle = QCheckBox('Enable supervised gesture mode')
+        self.gesture_toggle.setEnabled(False)
+        self.gesture_toggle.setToolTip('Opt in after Stand. Uses the built-in front-left camera and aligned depth; '
+                                       'keyboard driving is disabled while active.')
+        self.gesture_toggle.toggled.connect(self.toggle_gesture_mode)
+        control_layout.addWidget(self.gesture_toggle)
+        self.gesture_indicator = QLabel('GESTURE MODE OFF')
+        self.gesture_indicator.setWordWrap(True)
+        self.gesture_indicator.setStyleSheet('color: #a65b00; font-weight: 600;')
+        control_layout.addWidget(self.gesture_indicator)
+        control_layout.addStretch(1)
         self.setCentralWidget(root)
 
         self.power.setEnabled(False)
         self.stand.setEnabled(False)
+        self._set_connection_state('demo' if demo else 'offline' if offline else 'connecting')
         app = QApplication.instance()
         app.installEventFilter(self)
         self.signals.status.connect(self.status.setText)
@@ -718,70 +928,190 @@ class MainWindow(QMainWindow):
         self.signals.posture_status.connect(self.posture_message.setText)
         self.signals.gesture_info.connect(self.show_gesture_info)
         self.signals.gesture_off.connect(self.gesture_error)
-        if offline:
+        if demo:
+            self._start_demo()
+        elif offline:
             self.gesture_indicator.setText('GESTURE MODE OFF — offline preview')
         else:
             self.session.start()
 
+    def _set_connection_state(self, state):
+        states = {
+            'connecting': ('Connecting to Spot', '#b7791f',
+                           'Authenticating and discovering built-in cameras. Watch Terminal for prompts.'),
+            'connected': ('Connected • not standing', '#b7791f',
+                          'Use Power On if needed, then Stand to unlock keyboard movement.'),
+            'powered': ('Powered • stand required', '#b7791f',
+                        'Press Stand before using the keyboard or applying posture.'),
+            'ready': ('Stand request accepted • keyboard unlocked', '#08756e',
+                      'Hold a direction key to move; release it to request zero velocity.'),
+            'failed': ('Disconnected • movement disabled', '#b4232a',
+                       'Connection lost. Use the separate class E-stop if needed.'),
+            'offline': ('Offline posture preview', '#566b7a',
+                        'No robot connection, commands, or camera imagery.'),
+            'demo': ('Offline demo • simulated camera scenes', '#566b7a',
+                     'No robot connection or commands. Camera imagery is original grayscale test artwork.'),
+        }
+        title, color, detail = states[state]
+        self.state_title.setText(title)
+        self.state_dot.setStyleSheet(f'background: {color}; border: none; border-radius: 5px;')
+        self.status.setText(detail)
+
+    def _start_demo(self):
+        """Exercise the UI with static synthetic frames; never start the robot worker."""
+        self.on_connected(list(CAMERAS), False)
+        self.ready = False
+        self.power.setEnabled(False)
+        self.stand.setEnabled(False)
+        self.apply_button.setEnabled(False)
+        self.gesture_toggle.setEnabled(False)
+        self.gesture_indicator.setText('OFF • demo has no gesture recognition')
+        self._demo_frames = make_demo_frames()
+        self._demo_panorama = make_demo_panorama()
+        QTimer.singleShot(0, lambda: self.show_frame(self._demo_frames))
+        self._demo_timer = QTimer(self)
+        self._demo_timer.setInterval(int(PANORAMA_PERIOD * 1000))
+        self._demo_timer.timeout.connect(self._demo_tick)
+        self._demo_timer.start()
+        QTimer.singleShot(0, self._demo_tick)
+        self._set_connection_state('demo')
+
+    def _demo_tick(self):
+        if self.auto_panorama.isChecked():
+            self.show_panorama(self._demo_panorama)
+            self.show_panorama_status('Static front composite refreshed for UI review; '
+                                      'live stitching is not exercised in demo')
+
+    def _demo_auto_changed(self, enabled):
+        if enabled and hasattr(self, '_demo_panorama'):
+            self._demo_tick()
+        elif not enabled:
+            self.show_panorama_status('Demo auto refresh off; front composite remains visible')
+
+    def _demo_stitch_once(self):
+        self.show_panorama(self._demo_panorama)
+        self.show_panorama_status('Static simulated front composite shown; '
+                                  'live stitching is not exercised in demo')
+
     def on_connected(self, cameras, powered):
         self.ready = True
+        if not self.demo:
+            self._set_connection_state('powered' if powered else 'connected')
         for source in cameras:
             page = QWidget()
             page_layout = QVBoxLayout(page)
-            image_label = self._new_image_label((640, 430))
-            image_label.setText(f'Waiting for {self._camera_title(source)}…')
+            page_layout.setContentsMargins(12, 12, 12, 12)
+            page_layout.setSpacing(8)
+            title = QLabel(f'{self._camera_title(source)} camera')
+            title.setObjectName('sectionTitle')
+            page_layout.addWidget(title)
+            status = QLabel('Loading first image from Spot…' if not self.demo else
+                            'Simulated grayscale scene • no Spot camera connection')
+            status.setObjectName('cameraStatus')
+            page_layout.addWidget(status)
+            self.feed_status[source] = status
+            image_label = self._new_image_label((420, 270))
+            image_label.setText('Waiting for first camera image…' if not self.demo else
+                                'Loading simulated scene…')
+            image_label.setToolTip('Built-in fisheye camera. Grayscale remains grayscale when supplied by Spot.'
+                                   if not self.demo else 'Original simulated grayscale test scene; not Spot footage.')
             page_layout.addWidget(image_label, 1)
             self.tabs.insertTab(len(self.feed_labels), page, self._camera_title(source))
+            self.tabs.setTabToolTip(len(self.feed_labels),
+                                    f'Show the {self._camera_title(source).lower()} built-in fisheye feed.')
             self.feed_labels[source] = image_label
         self.tabs.setCurrentIndex(0)
 
         split_page = QWidget()
+        split_page.setMinimumHeight(480)
         split_grid = QGridLayout(split_page)
+        split_grid.setContentsMargins(12, 12, 12, 12)
+        split_grid.setSpacing(10)
         for index, source in enumerate(cameras):
             tile = QWidget()
             tile_layout = QVBoxLayout(tile)
-            tile_layout.addWidget(QLabel(self._camera_title(source)))
-            image_label = self._new_image_label((350, 225))
-            image_label.setText('Waiting for camera…')
+            tile_layout.setContentsMargins(0, 0, 0, 0)
+            tile_layout.setSpacing(4)
+            tile_title = QLabel(self._camera_title(source))
+            tile_title.setObjectName('sectionTitle')
+            tile_layout.addWidget(tile_title)
+            status = QLabel('Loading…' if not self.demo else 'Simulated scene')
+            status.setObjectName('cameraStatus')
+            tile_layout.addWidget(status)
+            self.split_status[source] = status
+            image_label = self._new_image_label((240, 130))
+            image_label.setText('Waiting for image…' if not self.demo else 'Loading demo…')
+            image_label.setToolTip('Built-in fisheye view in the split screen.' if not self.demo else
+                                   'Original simulated grayscale scene; not Spot footage.')
             tile_layout.addWidget(image_label, 1)
             split_grid.addWidget(tile, index // 2, index % 2)
             self.split_labels[source] = image_label
-        self.tabs.addTab(split_page, 'Split screen')
+        split_scroll = QScrollArea()
+        split_scroll.setWidgetResizable(True)
+        split_scroll.setWidget(split_page)
+        self.tabs.insertTab(len(cameras), split_scroll, 'Split screen')
+        self.tabs.setTabToolTip(len(cameras), 'View every available built-in fisheye feed at once.')
 
         panorama_page = QWidget()
+        panorama_page.setMinimumHeight(470)
         panorama_layout = QVBoxLayout(panorama_page)
+        panorama_layout.setContentsMargins(12, 12, 12, 12)
+        panorama_layout.setSpacing(8)
+        pano_title = QLabel('Approximate front panorama')
+        pano_title.setObjectName('sectionTitle')
+        panorama_layout.addWidget(pano_title)
         self.panorama_image = PanoramaView()
-        self.panorama_image.setMinimumSize(700, 400)
+        self.panorama_image.setMinimumSize(420, 260)
+        self.panorama_image.setToolTip('Drag to pan, scroll to zoom. The front-left and front-right '
+                                       'images are aligned by features, without calibrated 360° coverage.')
         panorama_layout.addWidget(self.panorama_image, 1)
         panorama_note = QLabel('Approximate front-left + front-right fisheye stitch. '
                                'No calibration or 360° coverage. Drag to pan; wheel to zoom.')
+        panorama_note.setObjectName('muted')
         panorama_note.setWordWrap(True)
         panorama_layout.addWidget(panorama_note)
         self.panorama_status = QLabel('Front panorama idle; individual feeds stay live.')
+        self.panorama_status.setObjectName('cameraStatus')
+        self.panorama_status.setWordWrap(True)
         panorama_layout.addWidget(self.panorama_status)
         self.auto_panorama = QCheckBox('Continuously update (about every 2 seconds)')
-        self.auto_panorama.toggled.connect(self.session.set_auto_panorama)
+        self.auto_panorama.setToolTip('Request a front-pair stitch at most about once every 2 seconds '
+                                      'on a background thread. Individual feeds continue if alignment fails.')
+        self.auto_panorama.toggled.connect(self._demo_auto_changed if self.demo else
+                                            self.session.set_auto_panorama)
         panorama_layout.addWidget(self.auto_panorama)
         self.stitch_button = QPushButton('Stitch current front frames once')
-        self.stitch_button.clicked.connect(self.session.request_panorama)
+        self.stitch_button.setToolTip('Try aligning fresh front-left and front-right frames once. '
+                                      'The result is approximate and may fail in low-detail scenes.')
+        self.stitch_button.clicked.connect(self._demo_stitch_once if self.demo else
+                                           self.session.request_panorama)
         panorama_layout.addWidget(self.stitch_button)
-        self.tabs.addTab(panorama_page, 'Panorama')
+        panorama_scroll = QScrollArea()
+        panorama_scroll.setWidgetResizable(True)
+        panorama_scroll.setWidget(panorama_page)
+        self.tabs.insertTab(len(cameras) + 1, panorama_scroll, 'Panorama')
+        self.tabs.setTabToolTip(len(cameras) + 1,
+                                'Approximate front-left and front-right stitch; no 360° coverage.')
         if not all(source in cameras for source in FRONT_PAIR):
             self.auto_panorama.setEnabled(False)
             self.stitch_button.setEnabled(False)
             self.panorama_status.setText('Front camera pair unavailable; individual feeds continue')
-        self.power.setEnabled(not powered)
-        self.stand.setEnabled(powered)
+        else:
+            self.auto_panorama.setChecked(True)
+        self.power.setEnabled(not powered and not self.demo)
+        self.stand.setEnabled(powered and not self.demo)
 
     def on_powered(self):
         self.power.setEnabled(False)
         self.stand.setEnabled(True)
+        self._set_connection_state('powered')
 
     def on_armed(self):
         self.armed = True
         self.power.setEnabled(False)
         self.apply_button.setEnabled(not self.pressed)
         self.gesture_toggle.setEnabled(bool(self.session.gesture_depth_source))
+        self._set_connection_state('ready')
 
     def toggle_gesture_mode(self, enabled):
         if enabled and (not self.ready or not self.armed or self.failed):
@@ -806,7 +1136,7 @@ class MainWindow(QMainWindow):
         self.gesture_toggle.setChecked(False)
         self.gesture_toggle.blockSignals(False)
         self.gesture_indicator.setText(f'GESTURE MODE OFF — {message}')
-        self.gesture_indicator.setStyleSheet('color: #b22; font-weight: bold;')
+        self.gesture_indicator.setStyleSheet('color: #a65b00; font-weight: 600;')
         self.apply_button.setEnabled(self.ready and self.armed and not self.failed)
         self.speed.setEnabled(True)
         self.stand.setEnabled(self.ready and self.armed and not self.failed)
@@ -821,43 +1151,56 @@ class MainWindow(QMainWindow):
         self.power.setEnabled(False)
         self.stand.setEnabled(False)
         self.height.setEnabled(False)
+        self.roll.setEnabled(False)
+        self.pitch.setEnabled(False)
         self.apply_button.setEnabled(False)
         self.gesture_toggle.setEnabled(False)
-        self.status.setText(f'Connection lost: {message}. Use the separate E-stop if needed.')
+        self._set_connection_state('failed')
+        self.status.setText(f'{message}. Use the separate class E-stop if needed.')
+        for label in (*self.feed_status.values(), *self.split_status.values()):
+            label.setText('Feed stopped • last image may remain visible')
+        if hasattr(self, 'panorama_status'):
+            self.panorama_status.setText('Disconnected • last stitch may remain visible')
 
     def show_frame(self, picture):
         if self.failed:
             return
         for source, frame in picture.items():
-            self._put_frame(self.feed_labels.get(source), frame)
-            self._put_frame(self.split_labels.get(source), frame)
+            pixmap = QPixmap.fromImage(ImageQt(frame))
+            self._put_frame(self.feed_labels.get(source), pixmap)
+            self._put_frame(self.split_labels.get(source), pixmap)
+            message = ('Simulated grayscale scene • not Spot footage' if self.demo else
+                       'Receiving built-in Spot camera images')
+            if source in self.feed_status:
+                self.feed_status[source].setText(message)
+            if source in self.split_status:
+                self.split_status[source].setText('Simulated scene' if self.demo else 'Receiving images')
 
     def show_panorama(self, picture):
         self.panorama_image.set_picture(picture)
 
     def show_panorama_status(self, message):
         if hasattr(self, 'panorama_status'):
-            self.panorama_status.setText(message)
+            self.panorama_status.setText(('SIMULATED • ' if self.demo else '') + message)
 
     @staticmethod
     def _new_image_label(size):
-        label = QLabel()
-        label.setMinimumSize(*size)
-        label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet('background: #151a20; color: white;')
-        return label
+        return CameraImageLabel(size)
 
     @staticmethod
     def _camera_title(source):
-        return source.replace('_fisheye_image', '').replace('_', ' ').title()
+        names = {'frontleft_fisheye_image': 'Front left',
+                 'frontright_fisheye_image': 'Front right',
+                 'left_fisheye_image': 'Left',
+                 'right_fisheye_image': 'Right',
+                 'back_fisheye_image': 'Back'}
+        return names.get(source, source.replace('_', ' ').title())
 
     @staticmethod
     def _put_frame(label, picture):
         if label is None:
             return
-        pixmap = QPixmap.fromImage(ImageQt(picture))
-        label.setPixmap(pixmap.scaled(label.size(), Qt.KeepAspectRatio,
-                                      Qt.SmoothTransformation))
+        label.set_picture(picture)
 
     def posture_changed(self, value=None):
         self.height_label.setText(f'requested +{self.height.value()} cm')
@@ -906,7 +1249,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.stop_motion()
-        if not self.offline:
+        if self.demo:
+            self._demo_timer.stop()
+        elif not self.offline:
             self.session.close()
         super().closeEvent(event)
 
@@ -916,11 +1261,13 @@ def main():
     parser.add_argument('--hostname', help='Spot hostname or IP; confirm with instructor')
     parser.add_argument('--offline-preview', action='store_true',
                         help='Show posture UI without connecting to a robot or showing camera footage')
+    parser.add_argument('--demo', action='store_true',
+                        help='Show simulated grayscale camera scenes without any robot connection or commands')
     args = parser.parse_args()
-    if not args.offline_preview and not args.hostname:
-        parser.error('--hostname is required unless --offline-preview is set')
+    if not args.offline_preview and not args.demo and not args.hostname:
+        parser.error('--hostname is required unless --offline-preview or --demo is set')
     app = QApplication([])
-    window = MainWindow(args.hostname, offline=args.offline_preview)
+    window = MainWindow(args.hostname, offline=args.offline_preview, demo=args.demo)
     window.show()
     return app.exec()
 

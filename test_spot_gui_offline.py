@@ -50,6 +50,32 @@ class GuiOfflineTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_full_demo_never_starts_robot_worker(self):
+        with patch('spot_control_gui.bosdyn.client.create_standard_sdk',
+                   side_effect=AssertionError('robot SDK creation in demo')):
+            window = MainWindow(None, demo=True)
+            try:
+                window.show()
+                self.app.processEvents()
+                self.assertEqual(window.tabs.count(), 8)
+                self.assertTrue(window.auto_panorama.isChecked())
+                self.assertIsNone(window.session.client)
+                self.assertFalse(window.session.thread.is_alive())
+                self.assertFalse(window.session.panorama_thread.is_alive())
+                self.assertFalse(window.power.isEnabled())
+                self.assertFalse(window.stand.isEnabled())
+                self.assertFalse(window.apply_button.isEnabled())
+                self.assertFalse(window.gesture_toggle.isEnabled())
+                self.assertTrue(all(frame.mode == 'L' for frame in window._demo_frames.values()))
+                self.assertIn('simulated', window.state_title.text().lower())
+                window.tabs.setCurrentIndex(5)
+                self.app.processEvents()
+                for label in window.split_labels.values():
+                    self.assertLessEqual(label.pixmap().width(), label.width())
+                    self.assertLessEqual(label.pixmap().height(), label.height())
+            finally:
+                window.close()
+
     def test_posture_request_rejected_while_moving_or_stopping(self):
         session = SpotSession(None, UiSignals())
         self.assertFalse(session.apply_posture(-1, 0, 0))

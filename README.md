@@ -5,11 +5,8 @@
 - [Install](#install)
 - [Run with the class E-stop](#run-with-the-class-e-stop)
 - [Controls and views](#controls-and-views)
+- [Screenshots](#screenshots)
 - [SDK and model files](#sdk-and-model-files)
-
-## Development history
-
-The early feature commits are explicitly reconstructed approximations, not recovered source snapshots. See [development history](docs/development-history.md) for the dates and scope.
 
 ## Install
 
@@ -108,9 +105,20 @@ In the E-stop Terminal, **Space** triggers the E-stop, **r** releases it, and **
 
 The installed SDK is **5.2.0**. Its [command builder documentation](https://dev.bostondynamics.com/python/bosdyn-client/src/bosdyn/client/robot_command.html) defines `body_height` as relative to nominal stand height, and its [programming tutorial](https://dev.bostondynamics.com/docs/python/understanding_spot_programming.html) demonstrates a +0.1 m request. The SDK Xbox controller example clamps height at ±0.30 m, but that is an example constant, not a verified safe physical range. No safe lowering bound was verified for this robot. Boston Dynamics' [front stitching example](https://dev.bostondynamics.com/python/examples/stitch_front_images/readme) uses the two front sources and calibration; this app's OpenCV stitch remains approximate.
 
+Run `python spot_control_gui.py --demo` for an offline view of the full console. Demo mode creates no robot client, authenticates no user, acquires no lease, and sends no network request or robot command. Its five camera scenes are original, static grayscale test artwork with visible **SIMULATED** labels. The demo panorama is a known-overlap simulated composite for UI review; it does not validate live feature stitching. Power On, Stand, Apply, and gesture control stay disabled. The older `--offline-preview` option remains available for a posture-only view.
+
+## Screenshots
+
+The screenshots below show the actual application window in offline demo mode. Their original grayscale camera imagery was generated for this documentation and was not captured from Spot.
+
+![Offline demo front-left camera tab with illustrative lab scene](docs/illustrative-front-camera-ui.png)
+
+![Offline demo split screen with illustrative lab scenes](docs/illustrative-split-screen-ui.png)
+
+![Offline demo posture preview](docs/illustrative-posture-ui.png)
 
 ## SDK and model files
 
 The Spot SDK checkout and virtual environment are excluded from this repository. Boston Dynamics' [SDK license](https://github.com/boston-dynamics/spot-sdk/blob/master/LICENSE) requires its full license and retained notices when SDK files are redistributed, and restricts trademark use that implies endorsement. The local MediaPipe model bundles are also excluded until their redistribution terms are confirmed. SCOPE's original project files are available under the [MIT License](LICENSE); that license does not cover the Spot SDK or third-party model bundles.
 
-**Compatibility:** macOS Apple Silicon offline UI checked with Python 3.14.2; live Spot operation tested by the project owner; Windows and Linux not tested.
+**Compatibility:** macOS Apple Silicon offline UI checked with Python 3.14.2; Windows and Linux not tested. Live robot operation has not been validated for this publication.
