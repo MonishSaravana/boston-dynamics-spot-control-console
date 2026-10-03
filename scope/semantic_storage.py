@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
@@ -48,10 +49,15 @@ def save_semantic_run(directory: Path, run: SemanticRun) -> None:
         json.dumps(projections, indent=2) + "\n")
     (directory / "projection_rejections.json").write_text(
         json.dumps(run.rejected_projection_ids, indent=2) + "\n")
+    detector_details = {}
+    if run.detector_name.startswith("torchvision"):
+        detector_details = {"weights": "MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1",
+                            "torch_version": version("torch"),
+                            "torchvision_version": version("torchvision")}
     (directory / "semantic_manifest.json").write_text(json.dumps({
         "format_version": 1, "detector": run.detector_name,
         "stage": run.stage, "projection_version": "scope-mask-depth-v1",
-        "fusion_version": "scope-episode-entities-v1"}, indent=2) + "\n")
+        "fusion_version": "scope-episode-entities-v1", **detector_details}, indent=2) + "\n")
     if run.store is not None:
         (directory / "entities.json").write_text(
             json.dumps(run.store.summaries(), indent=2) + "\n")

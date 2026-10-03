@@ -56,9 +56,12 @@ def asset_digest(path: Path) -> str:
 
 
 def episode_snapshot(episode_id: str, directory: Path, run: SemanticRun,
-                     alignment: MapAlignment) -> dict:
+                     alignment: MapAlignment, *, time_offset_s: float = 0.,
+                     time_domain: str = "source_seconds") -> dict:
     """Detach local hypotheses and their evidence before any global processing."""
     alignment.validate()
+    if not np.isfinite(time_offset_s) or time_domain not in ("source_seconds", "unix_utc"):
+        raise ValueError("Explicit finite clock offset and supported time domain required")
     if run.store is None or not run.frames:
         raise ValueError("Memory requires a nonempty entity-stage episode")
     local = []
@@ -67,6 +70,8 @@ def episode_snapshot(episode_id: str, directory: Path, run: SemanticRun,
         state["points_m"] = entity.points_world[
             ::max(1, int(np.ceil(len(entity.points_world) / 1200)))].tolist()
         state["frame_ids"] = sorted(entity.supporting_views)
+        state["first_seen_s"] += time_offset_s
+        state["last_seen_s"] += time_offset_s
         local.append(state)
     assets = {}
     for name in ("episode.npz", "manifest.json", "map.npz", "map_config.json",
@@ -81,17 +86,19 @@ def episode_snapshot(episode_id: str, directory: Path, run: SemanticRun,
     detector = json.loads(manifest.read_text()) if manifest.exists() else {
         "detector": run.detector_name, "version": "legacy-m2-saved-masks"}
     return {
-        "episode_id": episode_id, "start_s": run.frames[0].timestamp_s,
-        "end_s": run.frames[-1].timestamp_s, "asset_directory": str(directory.resolve()),
+        "episode_id": episode_id, "start_s": run.frames[0].timestamp_s+time_offset_s,
+        "end_s": run.frames[-1].timestamp_s+time_offset_s, "asset_directory": str(directory.resolve()),
+        "clock_offset_s": time_offset_s, "time_domain": time_domain,
         "asset_sha256": assets, "alignment": alignment.summary(),
         "map_reference": "map.npz" if "map.npz" in assets else None,
         "map_revision": len(run.frames), "detector": detector,
         "local_entities": local, "local_association": run.store.decisions,
         "observations": [{"observation_id": obs.observation_id,
-                          "frame_id": obs.detection.frame_id, "time_s": obs.timestamp_s,
+                          "frame_id": obs.detection.frame_id, "time_s": obs.timestamp_s+time_offset_s,
                           "valid_depth_fraction": obs.valid_depth_fraction}
                          for group in run.projections for obs in group],
-        "frames": [{"frame_id": f.frame_id, "time_s": f.timestamp_s,
+        "frames": [{"frame_id": f.frame_id, "time_s": f.timestamp_s+time_offset_s,
+                    "source_time_s": f.timestamp_s,
                     "T_episode_camera": f.T_world_camera.tolist(),
                     "intrinsics": asdict(f.intrinsics), "asset_index": index}
                    for index, f in enumerate(run.frames)],
@@ -129,6 +136,8 @@ class MemoryStore:
         episodes = self.episodes()
         if episodes and snapshot["alignment"]["world_frame"] != episodes[0]["alignment"]["world_frame"]:
             raise ValueError("Episodes must name the same global coordinate frame")
+        if episodes and snapshot["time_domain"] != episodes[0]["time_domain"]:
+            raise ValueError("Episodes must declare a common time domain")
         encoded = json.dumps(snapshot, sort_keys=True)
         old = self.db.execute("SELECT payload FROM episodes WHERE episode_id=?",
                               (snapshot["episode_id"],)).fetchone()
@@ -209,4 +218,6 @@ class MemoryStore:
                                              event["time_s"] > positive["time_s"]
                                              for event in self.history(global_id)),
                 "unobserved_since_s": belief.get("unobserved_since_s"),
+                "age_at_latest_episode_s": max(e["end_s"] for e in self.episodes())-positive["time_s"],
+                "time_domain": self.episode(positive["episode_id"])["time_domain"],
                 "rerun_reference": str(directory / "reconstruction.rrd")}

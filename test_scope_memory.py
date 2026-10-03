@@ -60,5 +60,97 @@ class MemoryStorageTests(unittest.TestCase):
             MapAlignment("room", "unknown").validate()
 
 
+def memory_scenario(root, name):
+    from scope.repeat_visits import scenario_visits, save_visit
+    from scope.memory import process_episode
+    store = MemoryStore(root / "memory.sqlite")
+    visits = scenario_visits(name)
+    for visit in visits:
+        store.import_snapshot(save_visit(visit, root / visit.episode_id))
+        process_episode(store, visit.episode_id)
+    return store, visits
+
+
+class GlobalIdentityTests(unittest.TestCase):
+    def test_unchanged_and_moved_entities_retain_identity(self):
+        from scope.memory import process_episode
+        for scenario, moved in (("unchanged", None), ("moved_backpack", "backpack"),
+                                ("moved_chair", "chair"), ("new_object", None)):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                store, visits = memory_scenario(Path(tmp), scenario)
+                links = store.links("episode_002")
+                self.assertEqual(sum(d["status"] == "LINKED" for d in links), 4)
+                self.assertEqual(len(store.beliefs()), 5 if scenario == "new_object" else 4)
+                events = [e for e in store.history() if e["kind"] == "MOVED"]
+                self.assertEqual(len(events), 1 if moved else 0)
+                if moved:
+                    event = events[0]
+                    self.assertIn(moved, event["global_id"])
+                    self.assertNotEqual(event["from_m"], event["to_m"])
+                    self.assertGreater(len(event["evidence_ids"]), 0)
+                    old = store.beliefs("episode_001")[event["global_id"]]
+                    self.assertEqual(old["geometry"]["center_m"], event["from_m"])
+                    last = store.last_seen(event["global_id"])
+                    self.assertEqual(last["last_positive"]["time_s"], visits[1].run.frames[-1].timestamp_s)
+                count = len(store.history())
+                process_episode(store, "episode_002")
+                self.assertEqual(len(store.history()), count)
+                store.close()
+
+
+class NegativeEvidenceTests(unittest.TestCase):
+    def test_removed_unobserved_occluded_and_detector_miss(self):
+        for scenario in ("removed", "unobserved", "occluded", "missing_detections"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                store, visits = memory_scenario(Path(tmp), scenario)
+                gid = "global/backpack_0001"
+                events = store.history(gid)
+                missing = [e for e in events if e["kind"] == "MISSING_HYPOTHESIS"]
+                self.assertEqual(len(missing), 1 if scenario == "removed" else 0)
+                last = store.last_seen(gid)
+                self.assertEqual(last["last_positive"]["episode_id"], "episode_001")
+                self.assertEqual(last["last_positive"]["time_s"],
+                                 visits[0].run.store.entities["backpack_01"].last_seen_s)
+                checks = [e for e in events if "result" in e]
+                self.assertEqual(len(checks), 8)
+                if scenario == "removed":
+                    self.assertEqual(last["status"], "POSSIBLY_MISSING")
+                    self.assertGreaterEqual(last["later_negative_checks"], 2)
+                    self.assertGreaterEqual(missing[0]["independent_negative_views"], 2)
+                    self.assertTrue(all(e["coverage"]>.55 and e["valid_depth_fraction"]>.8
+                                        for e in checks if e["result"]=="OBSERVED_ABSENT"))
+                else:
+                    self.assertEqual(last["status"], "NOT_CURRENTLY_OBSERVED")
+                    self.assertEqual(last["later_negative_checks"], 0)
+                store.close()
+
+    def test_bad_depth_and_unverified_detector_cannot_claim_absence(self):
+        from dataclasses import replace
+        import numpy as np
+        from scope.memory_identity import aligned_entities
+        from scope.memory_visibility import visibility_check
+        from scope.repeat_visits import scenario_visits, save_visit
+        with tempfile.TemporaryDirectory() as tmp:
+            visits = scenario_visits("removed")
+            snapshot = save_visit(visits[0], Path(tmp)/"a")
+            bag = next(e for e in aligned_entities(snapshot) if e["label"]=="backpack")
+            frame = visits[1].run.frames[1]
+            invalid = replace(frame, depth_m=np.zeros_like(frame.depth_m))
+            check = visibility_check(bag, invalid, np.eye(4), 1., 0.)
+            self.assertEqual(check["result"], "LOW_DEPTH_QUALITY")
+            check = visibility_check(bag, frame, np.eye(4), 0., 0.)
+            self.assertEqual(check["result"], "DETECTOR_CAPABILITY_UNVERIFIED")
+
+    def test_ambiguity_and_alignment_errors_abstain(self):
+        for scenario in ("ambiguous_chairs", "alignment_25cm", "alignment_1m", "alignment_1m_undeclared"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                store, _ = memory_scenario(Path(tmp), scenario)
+                unresolved = [d for d in store.links("episode_002") if d["status"] == "UNRESOLVED"]
+                self.assertGreaterEqual(len(unresolved), 2)
+                self.assertFalse(any(e["kind"] == "MOVED" for e in store.history()))
+                self.assertTrue(all(d["candidates"] for d in unresolved))
+                store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

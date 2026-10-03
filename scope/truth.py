@@ -16,6 +16,8 @@ def semantic_identity(part_name: str) -> tuple[str, str] | None:
         return "table", "table"
     if part_name == "backpack":
         return "backpack", "backpack"
+    if part_name == "new box":
+        return "new_box", "box"
     return None
 
 
@@ -35,8 +37,11 @@ class SyntheticTruthDetector:
         origin = np.broadcast_to(frame.T_world_camera[:3, 3], rays_world.shape)
         _, part_ids = cast_boxes(origin, rays_world, self.boxes)
         result = []
-        for identity, label in (("chair_a", "chair"), ("chair_b", "chair"),
-                                ("table", "table"), ("backpack", "backpack")):
+        identities = dict.fromkeys(semantic_identity(part.name) for part in self.boxes)
+        for tag in identities:
+            if tag is None:
+                continue
+            identity, label = tag
             indices = [i for i, part in enumerate(self.boxes)
                        if semantic_identity(part.name) == (identity, label)]
             mask = np.isin(part_ids, indices).reshape(K.height, K.width)
