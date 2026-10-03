@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import sys
+from typing import Callable
 
 import numpy as np
 
@@ -21,20 +22,36 @@ def _state_image(mapping: VoxelMap) -> np.ndarray:
 
 
 def record_viewer(frames: list[RgbdFrame], config: MapConfig, output: Path,
-                  mesh=None) -> VoxelMap:
+                  mesh=None,
+                  frame_hook: Callable[[RgbdFrame, int], None] | None = None,
+                  semantic_eye: tuple[np.ndarray, float] | None = None) -> VoxelMap:
     import rerun as rr
     import rerun.blueprint as rrb
 
+    right_views = [
+        rrb.Spatial2DView(origin="world/camera/rgb", name="RGB observation"),
+        rrb.Spatial2DView(origin="world/camera/depth", name="Depth in meters"),
+        rrb.Spatial2DView(origin="map/topdown",
+                          name="Occupied orange · Free teal · Unknown gray"),
+    ]
+    if frame_hook is not None:
+        right_views.insert(1, rrb.Spatial2DView(
+            origin="world/camera/semantic_masks", name="Semantic instance masks"))
+    view_options = {}
+    if semantic_eye is not None:
+        target, span = semantic_eye
+        view_options = {
+            "line_grid": False,
+            "eye_controls": rrb.EyeControls3D(
+                position=target + np.array([1.4, -2.0, 1.1]) * span,
+                look_target=target, eye_up=[0, 0, 1]),
+        }
     blueprint = rrb.Blueprint(
         rrb.Horizontal(
             rrb.Spatial3DView(origin="world", name="Growing 3D reconstruction",
-                              contents=["world/**"], background=[17, 25, 35]),
-            rrb.Vertical(
-                rrb.Spatial2DView(origin="world/camera/rgb", name="RGB observation"),
-                rrb.Spatial2DView(origin="world/camera/depth", name="Depth in meters"),
-                rrb.Spatial2DView(origin="map/topdown",
-                                  name="Occupied orange · Free teal · Unknown gray"),
-            ), column_shares=[2.2, 1.0]),
+                              contents=["world/**"], background=[17, 25, 35],
+                              **view_options),
+            rrb.Vertical(*right_views), column_shares=[2.2, 1.0]),
         rrb.BlueprintPanel(expanded=False),
         rrb.SelectionPanel(expanded=False),
         rrb.TimePanel(expanded=True, timeline="frame"),
@@ -83,6 +100,8 @@ def record_viewer(frames: list[RgbdFrame], config: MapConfig, output: Path,
             rr.log("errors", rr.TextLog(mapping.rejected[-1], level=rr.TextLogLevel.ERROR))
         if mapping.warnings and mapping.warnings[-1].startswith(frame.frame_id):
             rr.log("warnings", rr.TextLog(mapping.warnings[-1], level=rr.TextLogLevel.WARN))
+        if frame_hook is not None:
+            frame_hook(frame, i)
     if mesh is not None and len(mesh.vertices):
         rr.set_time("frame", sequence=len(frames)-1)
         rr.log("world/tsdf_surface", rr.Mesh3D(

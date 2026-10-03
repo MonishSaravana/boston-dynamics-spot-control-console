@@ -150,9 +150,9 @@ class EntityStore:
             entity.class_evidence[name] = entity.class_evidence.get(name, 0.) + weight * probability
         old_center = entity.center.copy()
         n = len(entity.observation_ids)
-        entity.center = ((entity.center * n + obs.center) / (n + 1)).astype(np.float32)
         entity.low = np.minimum(entity.low, obs.low)
         entity.high = np.maximum(entity.high, obs.high)
+        entity.center = ((entity.low + entity.high) / 2.0).astype(np.float32)
         delta = (obs.center - old_center).reshape(3, 1)
         entity.covariance = ((entity.covariance * n + obs.covariance) / (n + 1) +
                              (delta @ delta.T) / (n + 1)**2).astype(np.float32)

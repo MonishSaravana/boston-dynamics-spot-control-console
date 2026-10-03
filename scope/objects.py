@@ -72,7 +72,8 @@ class ObjectDetector(Protocol):
 
 def project_object(frame: RgbdFrame, detection: ObjectObservation2D,
                    *, max_points: int = 4000, min_support: int = 12,
-                   max_depth_m: float = 5.0) -> ObjectObservation3D | None:
+                   max_depth_m: float = 5.0,
+                   min_valid_fraction: float = .25) -> ObjectObservation3D | None:
     """Project valid mask depths; reject isolated extreme depth outliers.
 
     The returned bounds describe observed surfaces, not the hidden full object.
@@ -82,7 +83,7 @@ def project_object(frame: RgbdFrame, detection: ObjectObservation2D,
     depth = frame.depth_m[vv, uu]
     good = np.isfinite(depth) & (depth >= .15) & (depth <= max_depth_m)
     valid_fraction = float(good.mean())
-    if good.sum() < min_support:
+    if good.sum() < min_support or valid_fraction < min_valid_fraction:
         return None
     vv, uu, depth = vv[good], uu[good], depth[good]
     median = float(np.median(depth))
@@ -100,7 +101,7 @@ def project_object(frame: RgbdFrame, detection: ObjectObservation2D,
                               (vv - K.cy) * depth / K.fy, depth))
     points = camera_to_world(camera, frame.T_world_camera).astype(np.float32)
     low, high = np.percentile(points, [2, 98], axis=0)
-    center = np.median(points, axis=0)
+    center = (low + high) / 2.0
     spread = float(1.4826 * mad)
     # This is an observation uncertainty proxy; hidden extent is a separate limit.
     scale = max(.01, .015 * median + spread / np.sqrt(len(points)))
