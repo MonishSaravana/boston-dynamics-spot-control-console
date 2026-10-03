@@ -12,6 +12,7 @@ The front panorama is an approximate stitch of two cameras. The robot mesh displ
 - [Offline demo and screenshots](#offline-demo-and-screenshots)
 - [Offline 3D mapping](#offline-3d-mapping)
 - [Semantic objects in the map](#semantic-objects-in-the-map)
+- [Persistent memory across visits](#persistent-memory-across-visits)
 - [Future plans](#future-plans)
 - [Contact](#contact)
 - [Licensing and compatibility](#licensing-and-compatibility)
@@ -221,6 +222,34 @@ The real adapter uses TorchVision Mask R-CNN v2 COCO instance masks. The first r
 
 The entity JSON and association decisions are saved beside the original episode. `scope inspect runs/tum-entities keyboard_01` shows source detections, match evidence, and relations. Geometric relations in `relations.json` include distances, near, above/below, and ordering along the **world X axis**. World X ordering is a coordinate-frame measurement, not a viewer-relative or language-grounded notion of left and right. See [the Milestone 2 report](docs/milestone-2.md) for benchmark definitions, limits, and commits.
 
+
+## Persistent memory across visits
+
+The offline memory layer links saved episode-local entities to global hypotheses in an explicitly shared coordinate frame. SQLite retains each episode, identity audit, belief revision, and change event; previous positive locations remain available after an object moves or becomes unobserved. `last-seen` returns the last positive timestamp, fused position in meters, supporting frame and observation IDs, map revision, current status, location support, and later negative checks.
+
+Run the two-visit synthetic example after installing `scope` as above:
+
+```sh
+scope memory-demo moved_backpack --output runs/memory-backpack
+scope last-seen global/backpack_0001 --db runs/memory-backpack/memory.sqlite
+scope history global/backpack_0001 --db runs/memory-backpack/memory.sqlite
+scope replay-memory --db runs/memory-backpack/memory.sqlite
+```
+
+In Rerun, select the **visit** timeline and switch between `#1` and `#2`. Both chairs keep their global IDs. The backpack moves about **1.35 m** onto the table; its old position is gray and labeled **HISTORY**, with a yellow movement vector. These are episode-end belief snapshots with a supporting RGB/depth frame. Select `world/current/global/backpack_0001/evidence` in the stream tree to inspect the identity scores and evidence. Colors distinguish positive, stale, missing, and uncertain beliefs. The dates and imagery are simulated.
+
+Other scenarios expose removal, unobserved regions, similar-object ambiguity, occlusion, detector misses, noise, and alignment errors:
+
+```sh
+scope memory-demo removed --output runs/memory-removed
+scope memory-demo unobserved --output runs/memory-unobserved
+scope memory-demo ambiguous_chairs --output runs/memory-ambiguous
+scope benchmark-memory --output runs/memory-benchmark
+```
+
+An object becomes `POSSIBLY_MISSING` only after two adequate, distinct views see depth rays pass through its old region. A region outside the view, blocked by another surface, or supported by poor depth does not establish absence. Missing detections alone do not establish absence either. Real-model absence reliability defaults to zero because it has not been measured.
+
+Use `scope compare-episodes RUN_A RUN_B --shared-frame FRAME` to inspect identity candidates without adding to persistent memory. This flag asserts that both runs already share exact coordinates. For separately aligned maps, supply rigid-transform JSON with explicit translation/rotation uncertainty. Memory does not estimate map registration. Scores are heuristics; similar chairs can remain unresolved, and a new object of a previously seen class can also be left unresolved. The [Milestone 3 report](docs/milestone-3.md) gives separate import/build commands, alignment examples, all benchmark results, and failure limits. Run outputs, recordings, and databases stay outside Git.
 
 ## Future plans
 
