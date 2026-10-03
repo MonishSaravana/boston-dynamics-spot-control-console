@@ -20,6 +20,7 @@ def save_episode(directory: Path, frames: list[RgbdFrame], source_name: str) -> 
                         depth_times=np.array([f.depth_timestamp_s for f in frames]))
     manifest = {"format_version": 1, "source": source_name,
                 "origin_kind": frames[0].source,
+                "frame_ids": [frame.frame_id for frame in frames],
                 "frames": len(frames), "intrinsics": asdict(frames[0].intrinsics),
                 "coordinate_convention": "world follows supplied poses (synthetic Z up); optical X right Y down Z forward",
                 "pose_convention": "T_world_camera"}
@@ -35,7 +36,9 @@ def load_episode(directory: Path) -> list[RgbdFrame]:
         return [RgbdFrame(data["rgb"][i].copy(), data["depth_m"][i].copy(), K,
                           data["poses"][i].copy(), float(data["rgb_times"][i]),
                           float(data["depth_times"][i]), manifest["origin_kind"],
-                          f"replay-{i:04d}") for i in range(manifest["frames"])]
+                          manifest.get("frame_ids", [f"replay-{j:04d}" for j in
+                                                     range(manifest["frames"])])[i])
+                for i in range(manifest["frames"])]
 
 
 def save_map(directory: Path, mapping: VoxelMap) -> None:

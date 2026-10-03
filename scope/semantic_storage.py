@@ -1,6 +1,7 @@
 """Inspectable semantic evidence stored beside, never inside, the map snapshot."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -12,13 +13,14 @@ def save_semantic_run(directory: Path, run: SemanticRun) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     detection_rows = []
     masks = {}
-    for detections in run.detections:
+    for frame_index, detections in enumerate(run.detections):
         for detection in detections:
             mask_key = f"mask_{len(detection_rows):05d}"
             masks[mask_key] = detection.mask.astype(np.uint8)
             detection_rows.append({
                 "observation_id": detection.observation_id,
                 "frame_id": detection.frame_id,
+                "frame_index": frame_index,
                 "source": detection.source,
                 "label": detection.label,
                 "class_probabilities": detection.class_probabilities,
@@ -46,11 +48,50 @@ def save_semantic_run(directory: Path, run: SemanticRun) -> None:
         json.dumps(projections, indent=2) + "\n")
     (directory / "projection_rejections.json").write_text(
         json.dumps(run.rejected_projection_ids, indent=2) + "\n")
+    (directory / "semantic_manifest.json").write_text(json.dumps({
+        "format_version": 1, "detector": run.detector_name,
+        "stage": run.stage, "projection_version": "scope-mask-depth-v1",
+        "fusion_version": "scope-episode-entities-v1"}, indent=2) + "\n")
     if run.store is not None:
         (directory / "entities.json").write_text(
             json.dumps(run.store.summaries(), indent=2) + "\n")
         (directory / "association.json").write_text(
             json.dumps(run.store.decisions, indent=2) + "\n")
+
+
+def load_semantic_run(directory: Path) -> SemanticRun:
+    """Replay saved masks and poses without invoking the neural detector."""
+    from .storage import load_episode
+    from .objects import ObjectObservation2D
+    from .semantic_pipeline import run_semantics
+    frames = load_episode(directory)
+    rows = json.loads((directory / "detections.json").read_text())
+    groups = [[] for _ in frames]
+    with np.load(directory / "semantic_masks.npz") as masks:
+        for row in rows:
+            index = row.get("frame_index")
+            if index is None:
+                try:
+                    index = int(row["frame_id"].rsplit("-", 1)[1])
+                except (ValueError, IndexError) as exc:
+                    raise ValueError("Old semantic episode lacks a usable frame index") from exc
+            if not 0 <= index < len(frames):
+                raise ValueError("Detection frame index is outside the saved episode")
+            frames[index] = replace(frames[index], frame_id=row["frame_id"])
+            groups[index].append(ObjectObservation2D(
+                row["observation_id"], row["frame_id"],
+                masks[row["mask_key"]].astype(bool), row["class_probabilities"],
+                row["confidence"], row["source"], row.get("truth_id_for_evaluation")))
+    by_id = {frame.frame_id: group for frame, group in zip(frames, groups)}
+    class SavedDetector:
+        name = rows[0]["source"] if rows else "saved-empty-detections"
+        def detect(self, frame):
+            return by_id[frame.frame_id]
+    run = run_semantics(frames, SavedDetector())
+    expected = directory / "entities.json"
+    if expected.exists() and run.store.summaries() != json.loads(expected.read_text()):
+        raise ValueError("Saved masks no longer reproduce the episode-local entity states")
+    return run
 
 
 def load_entity_evidence(directory: Path, entity_id: str) -> dict:
