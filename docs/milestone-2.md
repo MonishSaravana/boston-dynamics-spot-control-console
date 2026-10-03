@@ -13,18 +13,19 @@ The real detector is a separate optional dependency. TorchVision Mask R-CNN v2 p
 ## Decisions and limitations
 
 - Known camera poses remain an input. This milestone does not estimate pose.
-- Association will score class compatibility and 3D geometric consistency with inspectable gates. Synthetic truth IDs are evaluation metadata only and never enter fusion.
+- Association scores class compatibility, normalized center distance, observed-extent overlap, and 3D point support. The gates and candidate scores are retained for inspection. A one-to-one frame assignment prevents two detections from updating the same entity at once. Synthetic truth IDs are evaluation metadata only and never enter fusion.
 - Axis-aligned extents are used unless orientation can be supported by observations. Partial surfaces do not justify a full oriented box.
 - Entity identity is limited to one episode. Cross-session persistence belongs to Milestone 3.
 - Real-data detection quality depends on the COCO vocabulary and image domain. The TUM sample has no object ground-truth labels, so its detections are demonstrations, not accuracy claims.
 
 ## Reproduction and results
 
-Commands and benchmark numbers will be added as each capability passes its tests. The first projection tests use deterministic synthetic RGB-D and exact masks; they verify points lie on the correct analytic object surfaces and that invalid/noisy depths are bounded.
+Commands and benchmark numbers will be added as each capability passes its tests. The first projection tests use deterministic synthetic RGB-D and exact masks; they verify points lie on the correct analytic object surfaces and that invalid/noisy depths are bounded. Ten synthetic views fuse into four entities (two chairs, table, backpack); a separate close-chair room retains two chair IDs. Partial masks, a within-episode disappearance, conflicting class probabilities, and a shifted camera pose are covered by tests.
 
 ## Checkpoints
 
-- Typed mask observations, synthetic truth masks, and world projection: implemented and passing relevant tests; commit pending.
+- `99f4365 Project synthetic object masks into 3D`: typed masks, exact synthetic truth, and depth projection.
+- Episode-local fusion, association audit, and stress tests: implemented and passing relevant tests; commit pending.
 
 ## Failed approaches
 
