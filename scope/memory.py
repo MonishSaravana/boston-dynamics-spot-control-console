@@ -7,7 +7,7 @@ import json
 import numpy as np
 
 from .memory_identity import aligned_entities, entity_context, match_episode
-from .memory_store import ALGORITHM, MemoryStore
+from .memory_store import ALGORITHM, MapAlignment, MemoryStore
 from .memory_visibility import independent_negative_views, visibility_check
 
 
@@ -52,8 +52,11 @@ def process_episode(store: MemoryStore, episode_id: str) -> list[dict]:
                         continue
                     uncertain.add(gid)
                     updated[gid]["status"] = "IDENTITY_UNCERTAIN"
+                    updated[gid]["location_supported"] = False
+                    updated[gid]["unobserved_since_s"] = updated[gid].get("unobserved_since_s") or episode["start_s"]
                     store.append_event(episode_id, gid, time, "IDENTITY_UNCERTAIN", {
                         "local_id": entity["entity_id"], "evidence_ids": evidence_ids,
+                        "previous_status":prior[gid]["status"], "new_status":"IDENTITY_UNCERTAIN",
                         "confidence": candidate["score"], "identity_audit": decision})
             else:
                 gid = decision["global_id"]
@@ -72,7 +75,8 @@ def process_episode(store: MemoryStore, episode_id: str) -> list[dict]:
                     labels = set(probabilities) | set(old["class_probabilities"])
                     probabilities = {k:(probabilities.get(k,0.)+old["class_probabilities"].get(k,0.))/2
                                      for k in labels}
-                confidence = entity["confidence"] * (decision["score"] if old else 1.)
+                sigma = entity["alignment_sigma_m"]
+                confidence = entity["confidence"] * (decision["score"] if old else float(np.exp(-sigma/.5)))
                 belief = {"global_id": gid, "label": max(probabilities, key=probabilities.get),
                           "class_probabilities": probabilities, "geometry": entity,
                           "status": "VISIBLE", "location_confidence": confidence,
@@ -83,7 +87,8 @@ def process_episode(store: MemoryStore, episode_id: str) -> list[dict]:
                           "algorithm": ALGORITHM}
                 if old:
                     distance = float(np.linalg.norm(np.array(entity["center_m"])-old["geometry"]["center_m"]))
-                    sigma = episode["alignment"]["translation_sigma_m"]
+                    sigma = next(c["alignment_sigma_m"] for c in decision["candidates"]
+                                 if c["global_id"]==gid)
                     if distance > max(.20, 3*sigma):
                         certain = decision["score"]>=.72 and decision["margin"]>=.085
                         kind = "MOVED" if certain else "POSSIBLY_MOVED"
@@ -109,6 +114,7 @@ def process_episode(store: MemoryStore, episode_id: str) -> list[dict]:
         for gid in prior.keys() - seen - uncertain:
             belief = updated[gid]
             belief["status"] = "NOT_CURRENTLY_OBSERVED"
+            belief["location_supported"] = False
             belief["unobserved_since_s"] = belief.get("unobserved_since_s") or episode["start_s"]
             store.append_event(episode_id, gid, time, "NOT_OBSERVED", {
                 "previous_position_m": belief["geometry"]["center_m"],
@@ -124,8 +130,9 @@ def process_episode(store: MemoryStore, episode_id: str) -> list[dict]:
             mapping = load_map(directory) if episode["map_reference"] else None
             alignment = episode["alignment"]
             transform = np.asarray(alignment["T_global_episode"])
-            sigma = alignment["translation_sigma_m"] + alignment["rotation_sigma_rad"] * \
-                float(np.linalg.norm(belief["geometry"]["center_m"]))
+            position = belief["geometry"]["center_m"]
+            sigma = float(np.hypot(MapAlignment.from_dict(alignment).sigma_at_global(position),
+                                  MapAlignment.from_dict(belief["alignment"]).sigma_at_global(position)))
             checks = [visibility_check(belief["geometry"], f, transform, reliability, sigma, mapping)
                       for f in frames]
             for index, check in enumerate(checks):

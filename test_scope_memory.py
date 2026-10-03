@@ -58,6 +58,9 @@ class MemoryStorageTests(unittest.TestCase):
             MapAlignment("room", "external_rigid", invalid).validate()
         with self.assertRaises(ValueError):
             MapAlignment("room", "unknown").validate()
+        with self.assertRaises(ValueError):
+            MapAlignment.from_dict({"world_frame":"room", "provenance":"external_rigid",
+                                    "T_global_episode":np.eye(4).tolist()})
 
 
 def memory_scenario(root, name):
@@ -72,6 +75,65 @@ def memory_scenario(root, name):
 
 
 class GlobalIdentityTests(unittest.TestCase):
+    def test_prior_alignment_uncertainty_also_blocks_identity(self):
+        import numpy as np
+        from scope.memory import process_episode
+        from scope.repeat_visits import scenario_visits, save_visit
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            visits = scenario_visits("unchanged")
+            store = MemoryStore(root/"memory.sqlite")
+            first = save_visit(visits[0],root/"a")
+            first["alignment"]["translation_sigma_m"] = .25
+            store.import_snapshot(first)
+            process_episode(store,"episode_001")
+            store.import_snapshot(save_visit(visits[1],root/"b"))
+            links = process_episode(store,"episode_002")
+            self.assertTrue(all(link["status"]=="UNRESOLVED" for link in links))
+            self.assertEqual(len(store.beliefs()),4)
+            T = np.eye(4)
+            T[:3,3] = [100,100,100]
+            alignment = MapAlignment("room","external_rigid",T,0.,.1)
+            self.assertAlmostEqual(alignment.sigma_at_global([101,100,100]),.1)
+            store.close()
+
+    def test_supplied_rigid_alignment_restores_global_coordinates(self):
+        from dataclasses import replace
+        import numpy as np
+        from scope.memory import process_episode
+        from scope.repeat_visits import scenario_visits, save_visit
+        from scope.memory_identity import aligned_entities
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            visits = scenario_visits("unchanged")
+            store = MemoryStore(root/"memory.sqlite")
+            store.import_snapshot(save_visit(visits[0],root/"a"))
+            process_episode(store,"episode_001")
+            T = np.eye(4)
+            T[:3,:3] = [[0,-1,0],[1,0,0],[0,0,1]]
+            T[:3,3] = [1.,.5,.2]
+            frames = [replace(f,T_world_camera=np.linalg.inv(T)@f.T_world_camera)
+                      for f in visits[1].run.frames]
+            by_id = {f.frame_id:d for f,d in zip(frames,visits[1].run.detections)}
+            class Masks:
+                name = "synthetic-truth"
+                def detect(self,frame): return by_id[frame.frame_id]
+            run = run_semantics(frames,Masks())
+            directory = root/"b"
+            save_episode(directory,frames,"transformed synthetic")
+            save_semantic_run(directory,run)
+            snapshot = episode_snapshot("episode_002",directory,run,
+                MapAlignment("synthetic-room","external_rigid",T),time_domain="unix_utc")
+            store.import_snapshot(snapshot)
+            links = process_episode(store,"episode_002")
+            self.assertTrue(all(link["status"]=="LINKED" and link["score"]>.95 for link in links))
+            for state in aligned_entities(snapshot):
+                original = visits[1].run.store.entities[state["entity_id"]]
+                self.assertLess(np.linalg.norm(np.array(state["center_m"])-original.center),.001)
+            with self.assertRaises(sqlite3.IntegrityError):
+                store.db.execute("UPDATE beliefs SET payload='{}'")
+            store.close()
+
     def test_unchanged_and_moved_entities_retain_identity(self):
         from scope.memory import process_episode
         for scenario, moved in (("unchanged", None), ("moved_backpack", "backpack"),
@@ -99,6 +161,27 @@ class GlobalIdentityTests(unittest.TestCase):
 
 
 class NegativeEvidenceTests(unittest.TestCase):
+    def test_missing_then_reappeared_restores_belief_without_erasing_events(self):
+        from dataclasses import replace
+        from scope.memory import process_episode
+        from scope.repeat_visits import scenario_visits, save_visit
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, _ = memory_scenario(root,"removed")
+            visit = scenario_visits("unchanged")[1]
+            frames = [replace(f,timestamp_s=f.timestamp_s+86400,depth_timestamp_s=f.depth_timestamp_s+86400,
+                              frame_id=f.frame_id.replace("episode_002","episode_003")) for f in visit.run.frames]
+            visit.episode_id = "episode_003"
+            visit.run = run_semantics(frames,SyntheticTruthDetector(visit.room.boxes))
+            store.import_snapshot(save_visit(visit,root/visit.episode_id))
+            process_episode(store,visit.episode_id)
+            self.assertEqual(len(store.beliefs()),4)
+            last = store.last_seen("global/backpack_0001")
+            self.assertEqual(last["status"],"VISIBLE")
+            self.assertEqual(last["last_positive"]["episode_id"],"episode_003")
+            self.assertTrue(any(e["kind"]=="MISSING_HYPOTHESIS" for e in store.history("global/backpack_0001")))
+            self.assertEqual(store.beliefs("episode_002")["global/backpack_0001"]["status"],"POSSIBLY_MISSING")
+            store.close()
     def test_removed_unobserved_occluded_and_detector_miss(self):
         for scenario in ("removed", "unobserved", "occluded", "missing_detections"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
@@ -122,6 +205,32 @@ class NegativeEvidenceTests(unittest.TestCase):
                 else:
                     self.assertEqual(last["status"], "NOT_CURRENTLY_OBSERVED")
                     self.assertEqual(last["later_negative_checks"], 0)
+                store.close()
+
+
+class MemoryEvaluationTests(unittest.TestCase):
+    def test_metrics_check_changes_and_actual_evidence(self):
+        from scope.memory_eval import evaluate_memory
+        for scenario in ("moved_backpack","removed","ambiguous_chairs","alignment_10cm","new_object"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                store, visits = memory_scenario(Path(tmp),scenario)
+                metrics = evaluate_memory(store,visits)
+                self.assertEqual(metrics["false_identity_merges"],0)
+                self.assertEqual(metrics["false_missing_claims"],0)
+                self.assertEqual(metrics["last_seen_timestamp_correctness"],1.)
+                self.assertEqual(metrics["evidence_retrieval_correctness"],1.)
+                if scenario=="moved_backpack":
+                    self.assertEqual(metrics["movement_recall"],1.)
+                if scenario=="removed":
+                    self.assertEqual(metrics["missing_hypothesis_recall"],1.)
+                if scenario=="ambiguous_chairs":
+                    self.assertEqual(metrics["unresolved_rate"],.5)
+                    self.assertGreater(metrics["current_belief_position_error_mean_m"],.3)
+                    self.assertEqual(metrics["current_updated_entity_position_error_count"],2)
+                if scenario=="alignment_10cm":
+                    self.assertGreater(metrics["current_updated_entity_position_error_mean_m"],.08)
+                if scenario=="new_object":
+                    self.assertEqual(metrics["current_updated_entity_position_error_count"],5)
                 store.close()
 
     def test_bad_depth_and_unverified_detector_cannot_claim_absence(self):

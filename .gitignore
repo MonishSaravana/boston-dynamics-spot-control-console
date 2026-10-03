@@ -44,6 +44,9 @@ __pycache__/
 *.mkv
 *.bag
 *.mcap
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # Reviewed documentation captures of the offline application UI
 !docs/illustrative-dashboard-ui.png

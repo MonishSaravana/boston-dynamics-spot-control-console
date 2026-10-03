@@ -40,8 +40,16 @@ class MapAlignment:
         self.validate()
         return {**asdict(self), "T_global_episode": self.T_global_episode.tolist()}
 
+    def sigma_at_global(self, position):
+        # Rotation uncertainty acts about the episode origin, not global zero.
+        radius = np.linalg.norm(np.asarray(position)-self.T_global_episode[:3,3])
+        return float(np.hypot(self.translation_sigma_m, self.rotation_sigma_rad*radius))
+
     @classmethod
     def from_dict(cls, data):
+        if data["provenance"] == "external_rigid" and not {
+                "translation_sigma_m", "rotation_sigma_rad"}.issubset(data):
+            raise ValueError("External alignment must declare translation and rotation uncertainty")
         return cls(data["world_frame"], data["provenance"],
                    np.asarray(data["T_global_episode"], dtype=float),
                    data.get("translation_sigma_m", 0.), data.get("rotation_sigma_rad", 0.))
@@ -64,6 +72,10 @@ def episode_snapshot(episode_id: str, directory: Path, run: SemanticRun,
         raise ValueError("Explicit finite clock offset and supported time domain required")
     if run.store is None or not run.frames:
         raise ValueError("Memory requires a nonempty entity-stage episode")
+    for frame in run.frames:
+        frame.validate()
+    if any(a.timestamp_s>=b.timestamp_s for a,b in zip(run.frames,run.frames[1:])):
+        raise ValueError("Episode timestamps must increase")
     local = []
     for entity in run.store.entities.values():
         state = entity.summary()
@@ -85,13 +97,17 @@ def episode_snapshot(episode_id: str, directory: Path, run: SemanticRun,
     manifest = directory / "semantic_manifest.json"
     detector = json.loads(manifest.read_text()) if manifest.exists() else {
         "detector": run.detector_name, "version": "legacy-m2-saved-masks"}
+    map_revision = None
+    if "map.npz" in assets:
+        with np.load(directory / "map.npz") as data:
+            map_revision = int(data["revision"])
     return {
         "episode_id": episode_id, "start_s": run.frames[0].timestamp_s+time_offset_s,
         "end_s": run.frames[-1].timestamp_s+time_offset_s, "asset_directory": str(directory.resolve()),
         "clock_offset_s": time_offset_s, "time_domain": time_domain,
         "asset_sha256": assets, "alignment": alignment.summary(),
         "map_reference": "map.npz" if "map.npz" in assets else None,
-        "map_revision": len(run.frames), "detector": detector,
+        "map_revision": map_revision, "detector": detector,
         "local_entities": local, "local_association": run.store.decisions,
         "observations": [{"observation_id": obs.observation_id,
                           "frame_id": obs.detection.frame_id, "time_s": obs.timestamp_s+time_offset_s,
@@ -133,6 +149,10 @@ class MemoryStore:
         self.db.close()
 
     def import_snapshot(self, snapshot: dict):
+        MapAlignment.from_dict(snapshot["alignment"]).validate()
+        if not snapshot["episode_id"] or not np.isfinite([snapshot["start_s"],snapshot["end_s"]]).all() \
+                or snapshot["end_s"]<snapshot["start_s"]:
+            raise ValueError("Episode ID and finite ordered times required")
         episodes = self.episodes()
         if episodes and snapshot["alignment"]["world_frame"] != episodes[0]["alignment"]["world_frame"]:
             raise ValueError("Episodes must name the same global coordinate frame")
@@ -176,12 +196,13 @@ class MemoryStore:
         return result
 
     def links(self, episode_id=None):
-        query = "SELECT payload FROM links"
+        query = "SELECT episode_id,payload FROM links"
         args = ()
         if episode_id:
             query += " WHERE episode_id=?"
             args = (episode_id,)
-        return [json.loads(row[0]) for row in self.db.execute(query + " ORDER BY seq", args)]
+        return [{"episode_id":row[0], **json.loads(row[1])}
+                for row in self.db.execute(query + " ORDER BY seq", args)]
 
     def history(self, global_id=None):
         query = "SELECT seq,episode_id,global_id,time_s,kind,payload FROM events"
@@ -211,8 +232,12 @@ class MemoryStore:
         frame_ids = {f["frame_id"] for f in self.episode(positive["episode_id"])["frames"]}
         if positive["frame_id"] not in frame_ids:
             raise ValueError("Last-seen evidence references a missing frame")
+        recording = directory / "reconstruction.rrd"
+        if not recording.exists():
+            recording = self.path.parent / "memory.rrd"
         return {"global_id": global_id, "status": belief["status"],
                 "location_confidence": belief["location_confidence"],
+                "location_supported": belief.get("location_supported", belief["status"]=="VISIBLE"),
                 "last_positive": positive, "evidence_directory": str(directory),
                 "later_negative_checks": sum(event["kind"] == "NOT_VISIBLE_FROM_VIEW" and
                                              event["time_s"] > positive["time_s"]
@@ -220,4 +245,4 @@ class MemoryStore:
                 "unobserved_since_s": belief.get("unobserved_since_s"),
                 "age_at_latest_episode_s": max(e["end_s"] for e in self.episodes())-positive["time_s"],
                 "time_domain": self.episode(positive["episode_id"])["time_domain"],
-                "rerun_reference": str(directory / "reconstruction.rrd")}
+                "rerun_reference": str(recording) if recording.exists() else None}

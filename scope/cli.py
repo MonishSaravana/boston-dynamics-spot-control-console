@@ -280,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
     benchmark = commands.add_parser("benchmark-entities",
                                     help="Run controlled synthetic semantic failures")
     benchmark.add_argument("--output", type=Path)
+    from .memory_cli import register_memory_commands, run_memory_command
+    register_memory_commands(commands)
     args = parser.parse_args(argv)
     if args.command == "map":
         if args.frames <= 0 or args.voxel_m <= 0 or args.frame_stride <= 0 or args.width <= 0:
@@ -293,6 +295,9 @@ def main(argv: list[str] | None = None) -> int:
         return _run_inspect(args)
     if args.command == "benchmark-entities":
         return _run_benchmark(args)
+    if args.command in ("memory", "memory-demo", "compare-episodes", "link-entities", "history",
+                        "last-seen", "replay-memory", "benchmark-memory"):
+        return run_memory_command(args)
     return _run_view(args)
 
 

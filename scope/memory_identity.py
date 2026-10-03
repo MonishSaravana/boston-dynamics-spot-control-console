@@ -19,11 +19,14 @@ def aligned_entities(episode: dict) -> list[dict]:
         corners = np.array(list(product(*zip(local["bounds_low_m"], local["bounds_high_m"]))))
         corners = corners @ R.T + t
         low, high = corners.min(axis=0), corners.max(axis=0)
-        state.update(center_m=(np.asarray(local["center_m"]) @ R.T + t).tolist(),
+        center = np.asarray(local["center_m"]) @ R.T + t
+        sigma = alignment.sigma_at_global(center)
+        state.update(center_m=center.tolist(), alignment_sigma_m=sigma,
                      bounds_low_m=low.tolist(), bounds_high_m=high.tolist(),
                      dimensions_m=(high-low).tolist(), points_m=points.tolist(),
                      covariance_m2=(R @ np.asarray(local["covariance_m2"]) @ R.T +
-                                    np.eye(3) * alignment.translation_sigma_m**2).tolist())
+                                    np.eye(3) * (alignment.translation_sigma_m**2+
+                                    (alignment.rotation_sigma_rad*np.linalg.norm(local["center_m"]))**2)).tolist())
         result.append(state)
     return result
 
@@ -40,6 +43,8 @@ def _context(entity: dict, others: list[dict]) -> dict[str, float]:
 
 
 def identity_candidates(episode: dict, beliefs: dict) -> tuple[list[dict], list[list[dict]]]:
+    if any(b["alignment"]["world_frame"]!=episode["alignment"]["world_frame"] for b in beliefs.values()):
+        raise ValueError("Identity scoring requires the same declared global coordinate frame")
     local = aligned_entities(episode)
     globals_ = list(beliefs.values())
     # A static-class contradiction is diagnostic, not an estimated registration.
@@ -71,8 +76,9 @@ def identity_candidates(episode: dict, beliefs: dict) -> tuple[list[dict], list[
             common = set(old_context) & set(new_context)
             context_score = float(np.exp(-np.mean([abs(new_context[k]-old_context[k])
                                                    for k in common]) / .8)) if common else .5
-            sigma = float(alignment["translation_sigma_m"] + alignment["rotation_sigma_rad"] *
-                          np.linalg.norm(entity["center_m"]))
+            # Both the old and the new episode alignment affect correspondence.
+            old_sigma = MapAlignment.from_dict(old["alignment"]).sigma_at_global(geometry["center_m"])
+            sigma = float(np.hypot(entity["alignment_sigma_m"], old_sigma))
             alignment_quality = float(np.exp(-sigma/.5 - residual/.7))
             score = float((.25*affinity + .22*dimension_score + .18*surface_score +
                            .25*location_score + .10*context_score) * alignment_quality)
