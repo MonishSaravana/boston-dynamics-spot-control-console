@@ -11,6 +11,7 @@ The front panorama is an approximate stitch of two cameras. The robot mesh displ
 - [Controls and views](#controls-and-views)
 - [Offline demo and screenshots](#offline-demo-and-screenshots)
 - [Offline 3D mapping](#offline-3d-mapping)
+- [Semantic objects in the map](#semantic-objects-in-the-map)
 - [Future plans](#future-plans)
 - [Contact](#contact)
 - [Licensing and compatibility](#licensing-and-compatibility)
@@ -189,6 +190,36 @@ Run mapping and existing offline tests without a robot:
 ```sh
 QT_QPA_PLATFORM=offscreen python -m unittest -v test_scope_mapping test_spot_gesture test_spot_gui_offline test_spot_model_view
 ```
+
+## Semantic objects in the map
+
+The optional semantic pipeline converts instance masks and valid depth into world-space object observations, then fuses repeated views into episode-local entities. Each entity has a stable ID, class distribution, observed 3D bounds and center in meters, uncertainty, timestamps, and the frame observations that support it. The Rerun viewer overlays 2D boxes and masks, projected object points, and labeled 3D entity bounds. Select an entity's `evidence` path in Rerun or use `scope inspect` to see its observations and association scores. The displayed confidence combines class evidence, valid depth, and view count; it is a heuristic, not a calibrated probability of correctness. These are current-episode estimates; they do not establish long-term identity or hidden object shape.
+
+Start with exact synthetic masks, which need no model download:
+
+```sh
+scope detect synthetic
+scope project-objects synthetic
+scope entities synthetic --output runs/room-entities
+scope map synthetic --entities --output runs/room-semantic-map
+scope inspect runs/room-entities chair_01
+scope benchmark-entities --output runs/room-object-benchmark
+```
+
+`detect` can be inspected without depth projection or entity fusion; `project-objects` can be inspected without fusion. The ordinary `scope map synthetic` command still runs geometry alone. The synthetic fixture labels two separate chairs, a table, and a backpack. Its masks and poses are **exact simulated truth**, not the output of a neural detector. `semantic_metrics.json`, `semantic_quality.png`, and the benchmark's `semantic_robustness.json`/`.png` report projection, association, and controlled failure results.
+
+For recorded TUM imagery, install the optional detector and run a short sample:
+
+```sh
+python -m pip install -e '.[detector]'
+scope entities tum /path/to/rgbd_dataset_freiburg1_xyz --frames 6 --frame-stride 10 --width 320 --classes chair,keyboard,cup,tv --output runs/tum-entities
+scope view runs/tum-entities
+scope map tum /path/to/rgbd_dataset_freiburg1_xyz --frames 6 --frame-stride 10 --width 320 --entities --classes chair,keyboard,cup,tv --output runs/tum-semantic-map
+```
+
+The real adapter uses TorchVision Mask R-CNN v2 COCO instance masks. The first run uses `curl` to download its approximately 177 MB weights from the official PyTorch host into the user's PyTorch cache, checks the filename's SHA-256 prefix, and does not add weights to this repository. It runs on CPU and excludes `person` by default; `--classes` chooses exact COCO labels. Recorded TUM masks are model predictions, and their class scores are not measured accuracy for that scene. The depth and poses come from the recording, not Spot. The model uses the [TorchVision pretrained weights API](https://docs.pytorch.org/vision/stable/models/generated/torchvision.models.detection.maskrcnn_resnet50_fpn_v2.html); TorchVision warns that pretrained weights can have terms derived from their training data.
+
+The entity JSON and association decisions are saved beside the original episode. `scope inspect runs/tum-entities keyboard_01` shows source detections, match evidence, and relations. Geometric relations in `relations.json` include distances, near, above/below, and ordering along the **world X axis**. World X ordering is a coordinate-frame measurement, not a viewer-relative or language-grounded notion of left and right. See [the Milestone 2 report](docs/milestone-2.md) for benchmark definitions, limits, and commits.
 
 
 ## Future plans
