@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scope-mapping"
+version = "0.1.0"
+description = "Offline RGB-D mapping for the independent SCOPE project"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2", "Pillow>=11", "scipy>=1.15", "scikit-image>=0.25", "matplotlib>=3.10", "rerun-sdk>=0.38,<0.39"]
+
+[project.scripts]
+scope = "scope.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scope*"]

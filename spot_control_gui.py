@@ -2,6 +2,7 @@
 """Small, keyboard-driven Spot controller. Requires an independent class E-stop."""
 
 import argparse
+import importlib.util
 import io
 import math
 import threading
@@ -19,14 +20,15 @@ from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.geometry import EulerZXY
 from PIL import Image
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QEvent, QObject, QPointF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QGraphicsScene, QGraphicsView, QMainWindow,
-                               QPushButton, QScrollArea, QSizePolicy, QSlider, QTabWidget,
-                               QVBoxLayout, QWidget)
+                               QComboBox, QLabel, QDockWidget, QGraphicsScene, QGraphicsView, QMainWindow,
+                               QMenu, QPushButton, QScrollArea, QSizePolicy, QSlider, QTabWidget,
+                               QToolButton, QVBoxLayout, QWidget)
 from spot_demo import make_demo_frames, make_demo_panorama
-from spot_gesture import GestureGate, GestureVision, Observation
+from spot_gesture import GestureGate, GestureVision, MODEL_DIR, Observation
+from spot_model_view import SpotModelView, hardware_matches_base
 
 
 DEFAULT_SPEED = 0.20  # m/s, slower than the SDK WASD example's 0.5 m/s
@@ -56,6 +58,7 @@ QMainWindow, QWidget#root { background: #f2f5f7; color: #172735; }
 QFrame#header, QFrame#surface, QFrame#controlPanel, QFrame#statusBar {
     background: #ffffff; border: 1px solid #dce3e8; border-radius: 10px;
 }
+QLabel { color: #172735; }
 QLabel#appTitle { color: #162b39; font-size: 20px; font-weight: 700; }
 QLabel#sectionTitle { color: #162b39; font-size: 15px; font-weight: 700; }
 QLabel#muted { color: #526574; font-size: 12px; }
@@ -75,6 +78,13 @@ QPushButton#applyButton { background: #0b747b; border-color: #08626a; color: whi
 QPushButton#applyButton:hover { background: #08626a; }
 QPushButton#applyButton:disabled { background: #dce7e8; border-color: #dce7e8;
                                   color: #71878a; }
+QToolButton { background: #ffffff; color: #172735; border: 1px solid #becbd4;
+              border-radius: 6px; padding: 10px 12px; font-weight: 600; }
+QToolButton:hover { background: #ecf4f5; border-color: #0b747b; }
+QComboBox { background: #ffffff; color: #172735; border: 1px solid #becbd4;
+            border-radius: 6px; padding: 6px 8px; }
+QComboBox QAbstractItemView { background: #ffffff; color: #172735;
+                              selection-background-color: #dfe9eb; }
 QTabWidget::pane { border: 1px solid #dce3e8; background: #ffffff; }
 QTabBar::tab { background: #edf2f4; color: #405563; padding: 9px 13px;
                border: 1px solid #dce3e8; border-bottom: none; }
@@ -83,6 +93,12 @@ QTabBar::tab:hover:!selected { background: #dfe9eb; }
 QScrollArea { border: none; background: transparent; }
 QCheckBox { color: #172735; spacing: 8px; }
 QSlider { min-height: 22px; }
+QSlider::groove:horizontal { height: 6px; background: #d4e0e5; border-radius: 3px; }
+QSlider::sub-page:horizontal { background: #0b747b; border-radius: 3px; }
+QSlider::handle:horizontal { width: 16px; margin: -6px 0; background: #ffffff;
+                             border: 1px solid #0b747b; border-radius: 8px; }
+QDockWidget { color: #162b39; font-weight: 700; }
+QDockWidget::title { background: #e9eff2; padding: 7px 10px; }
 """
 
 
@@ -109,6 +125,7 @@ class UiSignals(QObject):
     connected = Signal(list, bool)
     powered = Signal()
     armed = Signal()
+    model_state = Signal(object, str)
     failed = Signal(str)
     frame = Signal(object)
     panorama = Signal(object)
@@ -146,25 +163,29 @@ class SpotSession:
         self.gesture_depth_source = None
         self.client = None
         self.state_client = None
+        self.model_verified = False
+        self.model_reason = 'Robot model waiting for hardware configuration'
         self.powered = False
+        self.armed = False
         self.last_motion_time = -float('inf')
         self.lease_keepalive = None
         self.robot = None
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.camera_thread = None
         self.gesture_thread = None
+        self.state_thread = None
         self.panorama_thread = threading.Thread(target=self._panorama_loop, daemon=True)
 
     def start(self):
         self.panorama_thread.start()
         self.thread.start()
 
-    def set_keys(self, keys):
+    def set_keys(self, keys, released=False):
         with self.lock:
-            if self.gesture_mode:
+            if self.gesture_mode or not self.armed or self.closing.is_set():
                 return
             self.keys = set(keys)
-            if not keys:
+            if released or not keys:
                 self.pending = 'stop'
         self.wakeup.set()
 
@@ -176,7 +197,8 @@ class SpotSession:
 
     def apply_posture(self, height_cm, roll_deg, pitch_deg):
         with self.lock:
-            if self.keys or self.gesture_mode or self.closing.is_set() or self.pending == 'stop':
+            if (not self.armed or not self.powered or self.keys or self.gesture_mode or
+                    self.closing.is_set() or self.pending is not None):
                 self.signals.posture_status.emit(
                     'Apply blocked: movement, gesture mode, Stop, or exit is active')
                 return False
@@ -195,6 +217,9 @@ class SpotSession:
 
     def set_gesture_mode(self, enabled):
         with self.lock:
+            if enabled and (not self.armed or not self.powered or self.closing.is_set()):
+                self.signals.gesture_off.emit('Stand and confirm readiness first')
+                return
             if enabled and not self.gesture_depth_source:
                 self.signals.gesture_off.emit('Aligned front depth source is unavailable')
                 return
@@ -277,8 +302,8 @@ class SpotSession:
         self.closing.set()
         self.panorama_requested.set()
         self.action('stop')
-        # power_on can block for up to 20 s. Wait for the worker's final zero RPC.
-        self.thread.join(timeout=25.0)
+        # Normal command RPCs time out in 0.7 s. Never freeze the UI during exit.
+        self.thread.join(timeout=1.6)
 
     def _command(self, command, end_time_secs=None):
         self.client.robot_command(command=command, end_time_secs=end_time_secs, timeout=0.7)
@@ -307,6 +332,15 @@ class SpotSession:
                     self.gesture_depth_source = 'frontleft_depth_in_visual_frame'
             self.client = self.robot.ensure_client(RobotCommandClient.default_service_name)
             self.state_client = self.robot.ensure_client(RobotStateClient.default_service_name)
+            try:
+                hardware = self.state_client.get_robot_hardware_configuration(timeout=1.5)
+                self.model_verified = hardware_matches_base(hardware)
+                if not self.model_verified:
+                    self.model_reason = 'Robot skeleton differs from SDK base mesh; geometry hidden'
+            except Exception as exc:
+                self.model_reason = f'Robot skeleton not verified; geometry hidden: {exc}'
+            if not self.model_verified:
+                self.signals.model_state.emit(None, self.model_reason)
             lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
             self.lease_keepalive = LeaseKeepAlive(lease_client, must_acquire=True,
                                                    return_at_exit=True)
@@ -319,6 +353,8 @@ class SpotSession:
             self.gesture_thread = threading.Thread(target=self._gesture_loop,
                                                    args=(image_client,), daemon=True)
             self.gesture_thread.start()
+            self.state_thread = threading.Thread(target=self._state_loop, daemon=True)
+            self.state_thread.start()
             next_command = time.monotonic()
             last_gesture_direction = 0
             while not self.closing.is_set():
@@ -346,15 +382,31 @@ class SpotSession:
                         self.signals.powered.emit()
                         self.signals.status.emit('Powered on. Press Stand before driving.')
                     elif action == 'stand':
-                        self._zero()
-                        self._command(RobotCommandBuilder.synchro_stand_command(
-                            body_height=height,
-                            footprint_R_body=EulerZXY(roll=self.roll, pitch=self.pitch)))
-                        self.signals.armed.emit()
-                        self.signals.status.emit('Stand command sent; requested posture may be limited by Spot')
+                        if not self.powered:
+                            self.signals.status.emit('Stand blocked: Spot is not powered on')
+                        else:
+                            with self.lock:
+                                self.armed = False
+                            self._zero()
+                            self._command(RobotCommandBuilder.synchro_stand_command(
+                                body_height=height,
+                                footprint_R_body=EulerZXY(roll=self.roll, pitch=self.pitch)))
+                            self.signals.status.emit('Stand requested; waiting for fresh standing telemetry…')
+                            if self._await_stand():
+                                with self.lock:
+                                    can_arm = not self.closing.is_set() and self.pending != 'stop'
+                                    self.armed = can_arm
+                                if can_arm:
+                                    self.signals.armed.emit()
+                                    self.signals.status.emit('Standing confirmed by fresh robot state')
+                            else:
+                                self.signals.status.emit(
+                                    'Stand not confirmed; keyboard movement remains locked')
                     elif isinstance(action, tuple) and action[0] == 'posture':
                         _, new_height, new_roll, new_pitch = action
-                        if time.monotonic() - self.last_motion_time < 0.5:
+                        if not self.armed or not self.powered:
+                            self.signals.posture_status.emit('Apply blocked: Stand is not confirmed')
+                        elif time.monotonic() - self.last_motion_time < 0.5:
                             self.signals.posture_status.emit(
                                 'Apply blocked: wait until Spot has stopped')
                         elif not self._robot_is_stationary():
@@ -384,7 +436,7 @@ class SpotSession:
                     # Serialize the final safety check with the UI's Stop/mode-off update.
                     with self.lock:
                         remaining = self.gesture_valid_until - time.monotonic()
-                        if (self.gesture_mode and direction and
+                        if (self.armed and self.powered and self.gesture_mode and direction and
                                 self.gesture_motion == direction and remaining > 0.02):
                             self._command(RobotCommandBuilder.synchro_velocity_command(
                                 direction * GESTURE_SPEED, 0, 0, body_height=height),
@@ -400,7 +452,7 @@ class SpotSession:
                 elif keys and time.monotonic() >= next_command:
                     # Keep the final key check and RPC serialized with Stop/focus loss.
                     with self.lock:
-                        live_keys = set(self.keys) if not self.gesture_mode and \
+                        live_keys = set(self.keys) if self.armed and self.powered and not self.gesture_mode and \
                             not self.closing.is_set() and self.pending != 'stop' else set()
                         if live_keys:
                             forward = int(Qt.Key_W in live_keys or Qt.Key_Up in live_keys) - int(
@@ -420,6 +472,9 @@ class SpotSession:
         except Exception as exc:
             with self.lock:
                 self.keys.clear()
+                self.armed = False
+                self.gesture_mode = False
+                self.gesture_motion = 0
             self.signals.failed.emit(f'{type(exc).__name__}: {exc}')
         finally:
             self.closing.set()
@@ -450,6 +505,65 @@ class SpotSession:
         angular = velocity.angular
         return (math.sqrt(linear.x**2 + linear.y**2 + linear.z**2) < 0.03 and
                 math.sqrt(angular.x**2 + angular.y**2 + angular.z**2) < 0.05)
+
+    def _await_stand(self):
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not self.closing.is_set():
+            with self.lock:
+                if self.pending == 'stop':
+                    return False
+            try:
+                if self._robot_is_stationary():
+                    return True
+            except Exception:
+                pass
+            if self.closing.wait(0.2):
+                break
+        return False
+
+    def _state_loop(self):
+        """Publish fresh measured joint angles for the read-only URDF view."""
+        from spot_model_view import JOINT_NAMES
+        while not self.closing.is_set():
+            try:
+                state = self.state_client.get_robot_state(timeout=0.7)
+                kin = state.kinematic_state
+                robot_now = self._stamp_seconds(
+                    self.robot.time_sync.robot_timestamp_from_local_secs(time.time()))
+                age = robot_now - self._stamp_seconds(kin.acquisition_timestamp)
+                values = {joint.name: joint.position.value for joint in kin.joint_states
+                          if joint.HasField('position') and joint.name in JOINT_NAMES}
+                if 0 <= age <= 0.6 and len(values) == len(JOINT_NAMES):
+                    self.signals.model_state.emit(
+                        values if self.model_verified else None,
+                        'Measured joint state • recent robot telemetry' if self.model_verified
+                        else self.model_reason)
+                else:
+                    self.signals.model_state.emit(None, 'Robot model waiting for fresh joint telemetry')
+                    with self.lock:
+                        if self.armed:
+                            self.keys.clear()
+                            self.gesture_motion = 0
+                            self.armed = False
+                            self.pending = 'stop'
+                            self.closing.set()
+                            self.signals.failed.emit('Robot state became stale; movement disabled')
+                            self.wakeup.set()
+                            return
+            except Exception as exc:
+                if self.closing.is_set():
+                    return
+                self.signals.model_state.emit(None, f'Robot model telemetry unavailable: {exc}')
+                with self.lock:
+                    self.keys.clear()
+                    self.gesture_motion = 0
+                    self.pending = 'stop'
+                    self.armed = False
+                self.signals.failed.emit(f'Robot state connection problem: {exc}')
+                self.closing.set()
+                self.wakeup.set()
+                return
+            self.closing.wait(0.5)
 
     @staticmethod
     def _stamp_seconds(stamp):
@@ -534,7 +648,11 @@ class SpotSession:
                 with self.lock:
                     active_gesture = self.gesture_mode
                     sources = list(self.sources)
+                # Gesture worker supplies front-left visual frames; keep other feeds live.
                 if active_gesture:
+                    sources = [source for source in sources
+                               if source != 'frontleft_fisheye_image']
+                if not sources:
                     self.closing.wait(0.1)
                     continue
                 requests = [build_image_request(source, quality_percent=55)
@@ -560,6 +678,8 @@ class SpotSession:
                     self.panorama_requested.set()
                 self.closing.wait(0.15)
             except Exception as exc:
+                if self.closing.is_set():
+                    return
                 self.signals.failed.emit(f'Camera/connection problem: {exc}')
                 self.closing.set()
                 self.wakeup.set()
@@ -619,65 +739,6 @@ class PanoramaView(QGraphicsView):
                    1.2 if event.angleDelta().y() > 0 else 1 / 1.2)
 
 
-class BodyPosturePreview(QWidget):
-    """Body-frame diagram only: no legs, feet, collision, or reachability model."""
-
-    def __init__(self):
-        super().__init__()
-        self.setMinimumSize(400, 240)
-        self.height_cm = self.roll_deg = self.pitch_deg = 0
-
-    def set_request(self, height_cm, roll_deg, pitch_deg):
-        self.height_cm, self.roll_deg, self.pitch_deg = height_cm, roll_deg, pitch_deg
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor('#101820'))
-        w, h = self.width(), self.height()
-        center = QPointF(w * .5, h * .55)
-        scale = min(w / 4.5, h / 3.0)
-
-        def project(v):
-            x, y, z = v
-            return QPointF(center.x() + scale * (.78 * x - .58 * y),
-                           center.y() + scale * (.30 * x + .32 * y - z))
-
-        verts = [(x, y, z) for z in (-.22, .22)
-                 for y in (-.48, .48) for x in (-.9, .9)]
-        edges = [(a, b) for a in range(8) for b in range(a + 1, 8)
-                 if sum(verts[a][i] != verts[b][i] for i in range(3)) == 1]
-
-        def draw_box(points, color, dashed=False):
-            pen = QPen(QColor(color), 2)
-            if dashed:
-                pen.setStyle(Qt.DashLine)
-            painter.setPen(pen)
-            for a, b in edges:
-                painter.drawLine(project(points[a]), project(points[b]))
-
-        draw_box(verts, '#58636b', True)
-        q = EulerZXY(roll=math.radians(self.roll_deg),
-                     pitch=math.radians(self.pitch_deg)).to_quaternion()
-
-        def rotate(v):
-            x, y, z = v
-            return ((1 - 2 * (q.y*q.y + q.z*q.z))*x +
-                    2 * (q.x*q.y - q.z*q.w)*y + 2 * (q.x*q.z + q.y*q.w)*z,
-                    2 * (q.x*q.y + q.z*q.w)*x +
-                    (1 - 2 * (q.x*q.x + q.z*q.z))*y + 2 * (q.y*q.z - q.x*q.w)*z,
-                    2 * (q.x*q.z - q.y*q.w)*x + 2 * (q.y*q.z + q.x*q.w)*y +
-                    (1 - 2 * (q.x*q.x + q.y*q.y))*z + self.height_cm / 10)
-
-        draw_box([rotate(v) for v in verts], '#56d7d0')
-        painter.setPen(QColor('#d9e4e8'))
-        painter.drawText(12, 22, 'DESCRIPTIVE BODY-FRAME PREVIEW')
-        painter.drawText(12, h - 34, 'Gray: nominal   Cyan: requested offset')
-        painter.drawText(12, h - 15, 'Not to scale • no legs or feet • not a validated pose')
-        painter.end()
-
-
 class MainWindow(QMainWindow):
     def __init__(self, hostname, offline=False, demo=False):
         super().__init__()
@@ -685,7 +746,7 @@ class MainWindow(QMainWindow):
                             'Spot Control Console — OFFLINE PREVIEW' if offline else
                             f'Spot Control Console — {hostname}')
         self.resize(1240, 820)
-        self.setMinimumSize(980, 680)
+        self.setMinimumSize(1040, 620)
         self.setStyleSheet(GUI_STYLE)
         self.offline = offline or demo
         self.demo = demo
@@ -718,12 +779,19 @@ class MainWindow(QMainWindow):
         sub.setObjectName('muted')
         heading.addWidget(sub)
         header_row.addLayout(heading, 1)
+        self.layout_button = QToolButton()
+        self.layout_button.setText('Panels and layout')
+        self.layout_button.setPopupMode(QToolButton.InstantPopup)
+        self.layout_menu = QMenu(self.layout_button)
+        self.layout_button.setMenu(self.layout_menu)
+        header_row.addWidget(self.layout_button)
         self.stop = QPushButton('STOP MOVEMENT')
         self.stop.setObjectName('stopButton')
         self.stop.setMinimumWidth(205)
         self.stop.setToolTip('Immediately request zero velocity and clear held keys and gesture mode. '
                              'The separate class E-stop remains required.')
         self.stop.clicked.connect(self.stop_motion)
+        self.layout_menu.aboutToShow.connect(self.stop_motion)
         header_row.addWidget(self.stop)
         layout.addWidget(header)
 
@@ -752,56 +820,125 @@ class MainWindow(QMainWindow):
         status_row.addWidget(estop)
         layout.addWidget(status_bar)
 
-        content = QHBoxLayout()
-        content.setSpacing(12)
+        self.dock_host = QMainWindow()
+        self.dock_host.setDockNestingEnabled(True)
+        self.dock_host.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
+        layout.addWidget(self.dock_host, 1)
         camera_surface = QFrame()
         camera_surface.setObjectName('surface')
         camera_layout = QVBoxLayout(camera_surface)
         camera_layout.setContentsMargins(16, 14, 16, 16)
         camera_layout.setSpacing(8)
-        camera_title = QLabel('Cameras & preview')
+        camera_title = QLabel('Built-in cameras')
         camera_title.setObjectName('sectionTitle')
         camera_layout.addWidget(camera_title)
-        camera_intro = QLabel('Choose one built-in fisheye feed, all feeds, a front stitch, or the standing posture preview.')
+        camera_intro = QLabel('Choose a camera, all feeds, or an approximate front stitch.')
         camera_intro.setObjectName('muted')
         camera_intro.setWordWrap(True)
         camera_layout.addWidget(camera_intro)
+        source_row = QHBoxLayout()
+        source_row.addWidget(QLabel('View'))
+        self.source_select = QComboBox()
+        self.source_select.setFocusPolicy(Qt.NoFocus)
+        self.source_select.setToolTip('Choose a built-in feed, split screen, or front panorama.')
+        source_row.addWidget(self.source_select, 1)
+        camera_layout.addLayout(source_row)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().hide()
+        self.source_select.currentIndexChanged.connect(self.tabs.setCurrentIndex)
+        self.tabs.currentChanged.connect(self.source_select.setCurrentIndex)
         camera_layout.addWidget(self.tabs, 1)
-        content.addWidget(camera_surface, 1)
-
+        model_surface = QFrame()
+        model_surface.setObjectName('surface')
+        model_layout = QVBoxLayout(model_surface)
+        model_layout.setContentsMargins(16, 12, 16, 12)
+        model_layout.setSpacing(6)
+        model_title = QLabel('Robot geometry')
+        model_title.setObjectName('sectionTitle')
+        model_layout.addWidget(model_title)
+        model_note = QLabel('Read-only SDK model. Drag to orbit or pan; scroll to zoom. '
+                            'Legs update only from fresh telemetry with a matching skeleton.')
+        model_note.setObjectName('muted')
+        model_note.setWordWrap(True)
+        model_layout.addWidget(model_note)
+        self.model_view = SpotModelView()
+        model_layout.addWidget(self.model_view, 1)
         controls_scroll = QScrollArea()
         controls_scroll.setWidgetResizable(True)
         controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        controls_scroll.setMinimumWidth(298)
-        controls_scroll.setMaximumWidth(330)
         control_panel = QFrame()
         control_panel.setObjectName('controlPanel')
         control_layout = QVBoxLayout(control_panel)
         control_layout.setContentsMargins(18, 16, 18, 16)
         control_layout.setSpacing(10)
         controls_scroll.setWidget(control_panel)
-        content.addWidget(controls_scroll)
-        layout.addLayout(content, 1)
+        self.camera_dock = self._make_dock('Camera', 'cameraDock', camera_surface)
+        self.model_dock = self._make_dock('Robot Model', 'modelDock', model_surface)
+        self.controls_dock = self._make_dock('Controls', 'controlsDock', controls_scroll)
+        self.controls_dock.setMinimumWidth(320)
+        self._build_layout_menu()
+        self._place_docks('Balanced')
+        self.settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
+                                  'SCOPE', 'Spot Control Console')
+        saved = self.settings.value('dashboard/state')
+        self._pending_layout = None if saved and self.dock_host.restoreState(saved, 1) else 'Balanced'
 
-        posture_page = QWidget()
-        self.posture_page = posture_page
-        posture_page.setMinimumHeight(500)
-        posture_layout = QVBoxLayout(posture_page)
-        posture_layout.setContentsMargins(18, 16, 18, 16)
-        posture_layout.setSpacing(9)
+        ready_title = QLabel('Readiness')
+        ready_title.setObjectName('sectionTitle')
+        control_layout.addWidget(ready_title)
+        ready_note = QLabel('Connect, power on if needed, then Stand. Drive unlocks only after fresh standing telemetry.')
+        ready_note.setObjectName('muted')
+        ready_note.setWordWrap(True)
+        control_layout.addWidget(ready_note)
+        self.power = QPushButton('Power On')
+        self.power.setToolTip('Power Spot motors on after connecting. This does not make Spot stand or drive.')
+        self.power.clicked.connect(lambda: self.session.action('power'))
+        control_layout.addWidget(self.power)
+        self.stand = QPushButton('Stand')
+        self.stand.setToolTip('Request a high-level stand command. Driving unlocks only after fresh robot state confirms standing.')
+        self.stand.clicked.connect(lambda: self.session.action('stand'))
+        control_layout.addWidget(self.stand)
+        control_layout.addSpacing(8)
+
+        drive_title = QLabel('Keyboard movement')
+        drive_title.setObjectName('sectionTitle')
+        control_layout.addWidget(drive_title)
+        drive_note = QLabel('Hold W / ↑ forward, S / ↓ back, A / ← left, D / → right. Release to stop.')
+        drive_note.setObjectName('muted')
+        drive_note.setWordWrap(True)
+        drive_note.setToolTip('Direction keys work after Stand is confirmed. Releasing a key sends zero velocity; '
+                               'focus loss and app exit also request zero velocity.')
+        control_layout.addWidget(drive_note)
+        speed_heading = QHBoxLayout()
+        speed_heading.addWidget(QLabel('Speed limit'))
+        self.speed_label = QLabel(f'{DEFAULT_SPEED:.2f} m/s')
+        speed_heading.addWidget(self.speed_label, 1, Qt.AlignRight)
+        control_layout.addLayout(speed_heading)
+        self.speed = QSlider(Qt.Horizontal)
+        self.speed.setRange(5, int(MAX_SPEED * 100))
+        self.speed.setValue(int(DEFAULT_SPEED * 100))
+        self.speed.setFocusPolicy(Qt.NoFocus)
+        self.speed.setToolTip('Requested keyboard driving speed in meters per second, '
+                              'from 0.05 to 0.35 m/s. Diagonal movement is normalized.')
+        self.speed.valueChanged.connect(self.speed_changed)
+        control_layout.addWidget(self.speed)
+        speed_note = QLabel('0.05–0.35 m/s • commands expire after 0.35 s')
+        speed_note.setObjectName('muted')
+        speed_note.setWordWrap(True)
+        control_layout.addWidget(speed_note)
+        control_layout.addSpacing(8)
+
+        posture_layout = control_layout
         posture_heading = QLabel('Standing body posture')
         posture_heading.setObjectName('sectionTitle')
         posture_layout.addWidget(posture_heading)
-        posture_intro = QLabel('Preview requested body offsets. This diagram is descriptive, not a validated physical pose.')
+        posture_intro = QLabel('Set a standing body request, then Apply while Spot is stationary. These are offsets, not measured pose.')
         posture_intro.setObjectName('muted')
         posture_intro.setWordWrap(True)
         posture_layout.addWidget(posture_intro)
-        self.posture_preview = BodyPosturePreview()
-        posture_layout.addWidget(self.posture_preview, 1)
         height_row = QHBoxLayout()
-        height_row.addWidget(QLabel('Body height offset'))
+        posture_layout.addWidget(QLabel('Height offset from nominal stand'))
         self.height = QSlider(Qt.Horizontal)
         self.height.setRange(0, HEIGHT_LIMIT_CM)
         self.height.setValue(0)
@@ -842,59 +979,11 @@ class MainWindow(QMainWindow):
         self.apply_button.clicked.connect(self.apply_requested_posture)
         posture_layout.addWidget(self.apply_button)
         self.posture_message = QLabel(
-            'Preview only. Apply requires a stationary, powered, standing Spot.')
+            'Sliders edit the requested posture. Click Apply to send the high-level stand command to a stationary Spot.')
         self.posture_message.setWordWrap(True)
         posture_layout.addWidget(self.posture_message)
-        posture_scroll = QScrollArea()
-        posture_scroll.setWidgetResizable(True)
-        posture_scroll.setWidget(posture_page)
-        self.tabs.addTab(posture_scroll, 'Posture preview')
-        self.tabs.setTabToolTip(0, 'Preview requested standing body height, roll, and pitch; Apply is separate.')
         self.posture_changed()
 
-        ready_title = QLabel('Readiness')
-        ready_title.setObjectName('sectionTitle')
-        control_layout.addWidget(ready_title)
-        ready_note = QLabel('Connect, power on if needed, then Stand. Keyboard driving stays locked until Stand.')
-        ready_note.setObjectName('muted')
-        ready_note.setWordWrap(True)
-        control_layout.addWidget(ready_note)
-        self.power = QPushButton('Power On')
-        self.power.setToolTip('Power Spot motors on after connecting. This does not make Spot stand or drive.')
-        self.power.clicked.connect(lambda: self.session.action('power'))
-        control_layout.addWidget(self.power)
-        self.stand = QPushButton('Stand')
-        self.stand.setToolTip('Request a high-level stand command. Keyboard driving unlocks after the command is sent.')
-        self.stand.clicked.connect(lambda: self.session.action('stand'))
-        control_layout.addWidget(self.stand)
-        control_layout.addSpacing(8)
-
-        drive_title = QLabel('Keyboard movement')
-        drive_title.setObjectName('sectionTitle')
-        control_layout.addWidget(drive_title)
-        drive_note = QLabel('Hold W / ↑ forward, S / ↓ back, A / ← left, D / → right. Release to stop.')
-        drive_note.setObjectName('muted')
-        drive_note.setWordWrap(True)
-        drive_note.setToolTip('Direction keys work after Stand. Releasing every key sends zero velocity; '
-                               'focus loss and app exit also request zero velocity.')
-        control_layout.addWidget(drive_note)
-        speed_heading = QHBoxLayout()
-        speed_heading.addWidget(QLabel('Speed limit'))
-        self.speed_label = QLabel(f'{DEFAULT_SPEED:.2f} m/s')
-        speed_heading.addWidget(self.speed_label, 1, Qt.AlignRight)
-        control_layout.addLayout(speed_heading)
-        self.speed = QSlider(Qt.Horizontal)
-        self.speed.setRange(5, int(MAX_SPEED * 100))
-        self.speed.setValue(int(DEFAULT_SPEED * 100))
-        self.speed.setFocusPolicy(Qt.NoFocus)
-        self.speed.setToolTip('Requested keyboard driving speed in meters per second, '
-                              'from 0.05 to 0.35 m/s. Diagonal movement is normalized.')
-        self.speed.valueChanged.connect(self.speed_changed)
-        control_layout.addWidget(self.speed)
-        speed_note = QLabel('0.05–0.35 m/s • commands expire after 0.35 s')
-        speed_note.setObjectName('muted')
-        control_layout.addWidget(speed_note)
-        control_layout.addSpacing(8)
 
         gesture_title = QLabel('Supervised gesture mode')
         gesture_title.setObjectName('sectionTitle')
@@ -918,6 +1007,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         app.installEventFilter(self)
         self.signals.status.connect(self.status.setText)
+        self.signals.model_state.connect(self.show_model_state)
         self.signals.connected.connect(self.on_connected)
         self.signals.powered.connect(self.on_powered)
         self.signals.armed.connect(self.on_armed)
@@ -935,6 +1025,76 @@ class MainWindow(QMainWindow):
         else:
             self.session.start()
 
+    def _make_dock(self, title, name, content):
+        dock = QDockWidget(title, self.dock_host)
+        dock.setObjectName(name)
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable |
+                         QDockWidget.DockWidgetClosable)
+        dock.setWidget(content)
+        return dock
+
+    def _build_layout_menu(self):
+        for dock in (self.camera_dock, self.model_dock, self.controls_dock):
+            self.layout_menu.addAction(dock.toggleViewAction())
+        self.layout_menu.addSeparator()
+        for name in ('Balanced', 'Camera Focus', 'Model Focus'):
+            self.layout_menu.addAction(name, lambda checked=False, preset=name:
+                                       self._place_docks(preset))
+        self.layout_menu.addSeparator()
+        self.layout_menu.addAction('Restore Default Layout', self.restore_default_layout)
+
+    def _place_docks(self, preset):
+        docks = (self.camera_dock, self.model_dock, self.controls_dock)
+        for dock in docks:
+            self.dock_host.removeDockWidget(dock)
+            dock.setFloating(False)
+            self.dock_host.addDockWidget(Qt.LeftDockWidgetArea, dock)
+            dock.show()
+        self.dock_host.splitDockWidget(self.camera_dock, self.model_dock, Qt.Horizontal)
+        if preset == 'Balanced':
+            self.dock_host.splitDockWidget(self.model_dock, self.controls_dock, Qt.Horizontal)
+        elif preset == 'Camera Focus':
+            self.dock_host.splitDockWidget(self.model_dock, self.controls_dock, Qt.Vertical)
+        else:
+            self.dock_host.splitDockWidget(self.camera_dock, self.controls_dock, Qt.Vertical)
+        self._pending_layout = preset
+        if self.isVisible():
+            QTimer.singleShot(0, self._size_docks)
+
+    def _size_docks(self):
+        preset = self._pending_layout
+        if preset:
+            width = self.dock_host.width()
+            height = self.dock_host.height()
+            if preset == 'Balanced':
+                self.dock_host.resizeDocks(
+                    [self.camera_dock, self.model_dock, self.controls_dock],
+                    [int(width * .47), int(width * .30), int(width * .23)], Qt.Horizontal)
+            elif preset == 'Camera Focus':
+                self.dock_host.resizeDocks(
+                    [self.camera_dock, self.model_dock],
+                    [int(width * .60), int(width * .40)], Qt.Horizontal)
+                self.dock_host.resizeDocks(
+                    [self.model_dock, self.controls_dock],
+                    [int(height * .62), int(height * .38)], Qt.Vertical)
+            else:
+                self.dock_host.resizeDocks(
+                    [self.camera_dock, self.model_dock],
+                    [int(width * .42), int(width * .58)], Qt.Horizontal)
+                self.dock_host.resizeDocks(
+                    [self.camera_dock, self.controls_dock],
+                    [int(height * .60), int(height * .40)], Qt.Vertical)
+            self._pending_layout = None
+
+    def restore_default_layout(self):
+        self._place_docks('Balanced')
+        self.settings.remove('dashboard/state')
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._pending_layout:
+            QTimer.singleShot(0, self._size_docks)
+
     def _set_connection_state(self, state):
         states = {
             'connecting': ('Connecting to Spot', '#b7791f',
@@ -943,7 +1103,7 @@ class MainWindow(QMainWindow):
                           'Use Power On if needed, then Stand to unlock keyboard movement.'),
             'powered': ('Powered • stand required', '#b7791f',
                         'Press Stand before using the keyboard or applying posture.'),
-            'ready': ('Stand request accepted • keyboard unlocked', '#08756e',
+            'ready': ('Standing confirmed • keyboard unlocked', '#08756e',
                       'Hold a direction key to move; release it to request zero velocity.'),
             'failed': ('Disconnected • movement disabled', '#b4232a',
                        'Connection lost. Use the separate class E-stop if needed.'),
@@ -968,6 +1128,7 @@ class MainWindow(QMainWindow):
         self.gesture_indicator.setText('OFF • demo has no gesture recognition')
         self._demo_frames = make_demo_frames()
         self._demo_panorama = make_demo_panorama()
+        self.model_view.show_demo_reference()
         QTimer.singleShot(0, lambda: self.show_frame(self._demo_frames))
         self._demo_timer = QTimer(self)
         self._demo_timer.setInterval(int(PANORAMA_PERIOD * 1000))
@@ -994,6 +1155,8 @@ class MainWindow(QMainWindow):
                                   'live stitching is not exercised in demo')
 
     def on_connected(self, cameras, powered):
+        if self.failed:
+            return
         self.ready = True
         if not self.demo:
             self._set_connection_state('powered' if powered else 'connected')
@@ -1002,15 +1165,12 @@ class MainWindow(QMainWindow):
             page_layout = QVBoxLayout(page)
             page_layout.setContentsMargins(12, 12, 12, 12)
             page_layout.setSpacing(8)
-            title = QLabel(f'{self._camera_title(source)} camera')
-            title.setObjectName('sectionTitle')
-            page_layout.addWidget(title)
             status = QLabel('Loading first image from Spot…' if not self.demo else
                             'Simulated grayscale scene • no Spot camera connection')
             status.setObjectName('cameraStatus')
             page_layout.addWidget(status)
             self.feed_status[source] = status
-            image_label = self._new_image_label((420, 270))
+            image_label = self._new_image_label((280, 110))
             image_label.setText('Waiting for first camera image…' if not self.demo else
                                 'Loading simulated scene…')
             image_label.setToolTip('Built-in fisheye camera. Grayscale remains grayscale when supplied by Spot.'
@@ -1061,7 +1221,7 @@ class MainWindow(QMainWindow):
         pano_title.setObjectName('sectionTitle')
         panorama_layout.addWidget(pano_title)
         self.panorama_image = PanoramaView()
-        self.panorama_image.setMinimumSize(420, 260)
+        self.panorama_image.setMinimumSize(280, 180)
         self.panorama_image.setToolTip('Drag to pan, scroll to zoom. The front-left and front-right '
                                        'images are aligned by features, without calibrated 360° coverage.')
         panorama_layout.addWidget(self.panorama_image, 1)
@@ -1092,6 +1252,10 @@ class MainWindow(QMainWindow):
         self.tabs.insertTab(len(cameras) + 1, panorama_scroll, 'Panorama')
         self.tabs.setTabToolTip(len(cameras) + 1,
                                 'Approximate front-left and front-right stitch; no 360° coverage.')
+        self.source_select.addItems([self.tabs.tabText(index)
+                                     for index in range(self.tabs.count())])
+        self.tabs.tabBar().hide()
+        self.source_select.setCurrentIndex(0)
         if not all(source in cameras for source in FRONT_PAIR):
             self.auto_panorama.setEnabled(False)
             self.stitch_button.setEnabled(False)
@@ -1102,15 +1266,26 @@ class MainWindow(QMainWindow):
         self.stand.setEnabled(powered and not self.demo)
 
     def on_powered(self):
+        if self.failed:
+            return
         self.power.setEnabled(False)
         self.stand.setEnabled(True)
         self._set_connection_state('powered')
 
     def on_armed(self):
+        if self.failed:
+            return
         self.armed = True
         self.power.setEnabled(False)
         self.apply_button.setEnabled(not self.pressed)
-        self.gesture_toggle.setEnabled(bool(self.session.gesture_depth_source))
+        models_ready = (importlib.util.find_spec('mediapipe') is not None and
+                        (MODEL_DIR / 'gesture_recognizer.task').is_file() and
+                        (MODEL_DIR / 'pose_landmarker_lite.task').is_file())
+        self.gesture_toggle.setEnabled(bool(self.session.gesture_depth_source) and models_ready)
+        if not self.session.gesture_depth_source:
+            self.gesture_indicator.setText('GESTURE MODE OFF • aligned front depth unavailable')
+        elif not models_ready:
+            self.gesture_indicator.setText('GESTURE MODE OFF • model files or MediaPipe missing; see README')
         self._set_connection_state('ready')
 
     def toggle_gesture_mode(self, enabled):
@@ -1157,6 +1332,7 @@ class MainWindow(QMainWindow):
         self.gesture_toggle.setEnabled(False)
         self._set_connection_state('failed')
         self.status.setText(f'{message}. Use the separate class E-stop if needed.')
+        self.model_view.set_measured_state(None, 'Disconnected • model telemetry unavailable')
         for label in (*self.feed_status.values(), *self.split_status.values()):
             label.setText('Feed stopped • last image may remain visible')
         if hasattr(self, 'panorama_status'):
@@ -1175,6 +1351,10 @@ class MainWindow(QMainWindow):
                 self.feed_status[source].setText(message)
             if source in self.split_status:
                 self.split_status[source].setText('Simulated scene' if self.demo else 'Receiving images')
+
+    def show_model_state(self, angles, message):
+        if not self.failed:
+            self.model_view.set_measured_state(angles, message)
 
     def show_panorama(self, picture):
         self.panorama_image.set_picture(picture)
@@ -1206,8 +1386,6 @@ class MainWindow(QMainWindow):
         self.height_label.setText(f'requested +{self.height.value()} cm')
         self.roll_label.setText(f'{self.roll.value():+d}°')
         self.pitch_label.setText(f'{self.pitch.value():+d}°')
-        self.posture_preview.set_request(
-            self.height.value(), self.roll.value(), self.pitch.value())
 
     def apply_requested_posture(self):
         if self.ready and self.armed and not self.failed and not self.pressed:
@@ -1231,7 +1409,12 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         if event.type() in (QEvent.ApplicationDeactivate, QEvent.WindowDeactivate):
             self.stop_motion()
+        elif event.type() == QEvent.MouseButtonPress and obj is self.source_select:
+            self.stop_motion()
         elif event.type() in (QEvent.KeyPress, QEvent.KeyRelease) and event.key() in KEYS:
+            if QApplication.activePopupWidget() is not None or self.source_select.view().isVisible():
+                self.stop_motion()
+                return False
             if event.isAutoRepeat():
                 return True
             if event.type() == QEvent.KeyPress and self.ready and self.armed and \
@@ -1243,12 +1426,13 @@ class MainWindow(QMainWindow):
                 self.pressed.discard(event.key())
                 self.apply_button.setEnabled(self.ready and self.armed and not self.failed and
                                              not self.pressed and not self.gesture_toggle.isChecked())
-                self.session.set_keys(self.pressed)
+                self.session.set_keys(self.pressed, released=True)
             return True
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
         self.stop_motion()
+        self.settings.setValue('dashboard/state', self.dock_host.saveState(1))
         if self.demo:
             self._demo_timer.stop()
         elif not self.offline:
@@ -1260,7 +1444,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--hostname', help='Spot hostname or IP; confirm with instructor')
     parser.add_argument('--offline-preview', action='store_true',
-                        help='Show posture UI without connecting to a robot or showing camera footage')
+                        help='Show posture controls without connecting to a robot or showing camera footage')
     parser.add_argument('--demo', action='store_true',
                         help='Show simulated grayscale camera scenes without any robot connection or commands')
     args = parser.parse_args()

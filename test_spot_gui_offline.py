@@ -2,6 +2,7 @@
 
 import io
 import os
+import tempfile
 import time
 import unittest
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from bosdyn.api import image_pb2, robot_state_pb2
 from PIL import Image
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from spot_control_gui import (HEIGHT_LIMIT_CM, MainWindow, SpotSession, UiSignals,
@@ -20,7 +22,17 @@ from spot_control_gui import (HEIGHT_LIMIT_CM, MainWindow, SpotSession, UiSignal
 class GuiOfflineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.settings_dir = tempfile.TemporaryDirectory()
+        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, cls.settings_dir.name)
         cls.app = QApplication.instance() or QApplication([])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.settings_dir.cleanup()
+
+    def setUp(self):
+        QSettings(QSettings.IniFormat, QSettings.UserScope,
+                  'SCOPE', 'Spot Control Console').clear()
 
     def test_camera_decoder_retains_grayscale(self):
         raw = image_pb2.Image(format=image_pb2.Image.FORMAT_RAW,
@@ -57,7 +69,8 @@ class GuiOfflineTests(unittest.TestCase):
             try:
                 window.show()
                 self.app.processEvents()
-                self.assertEqual(window.tabs.count(), 8)
+                self.assertEqual(window.tabs.count(), 7)
+                self.assertEqual(window.source_select.count(), 7)
                 self.assertTrue(window.auto_panorama.isChecked())
                 self.assertIsNone(window.session.client)
                 self.assertFalse(window.session.thread.is_alive())
@@ -66,6 +79,9 @@ class GuiOfflineTests(unittest.TestCase):
                 self.assertFalse(window.stand.isEnabled())
                 self.assertFalse(window.apply_button.isEnabled())
                 self.assertFalse(window.gesture_toggle.isEnabled())
+                self.assertIsNone(window.session.pending)
+                self.assertIsNotNone(window.model_view.angles)
+                self.assertIn('not measured', window.model_view.message)
                 self.assertTrue(all(frame.mode == 'L' for frame in window._demo_frames.values()))
                 self.assertIn('simulated', window.state_title.text().lower())
                 window.tabs.setCurrentIndex(5)
@@ -76,8 +92,50 @@ class GuiOfflineTests(unittest.TestCase):
             finally:
                 window.close()
 
+    def test_docks_presets_and_saved_visibility(self):
+        window = MainWindow(None, demo=True)
+        try:
+            window.resize(1100, 740)
+            window.show()
+            self.app.processEvents()
+            self.app.processEvents()
+            self.assertTrue(all(dock.isVisible() for dock in
+                                (window.camera_dock, window.model_dock, window.controls_dock)))
+            self.assertLess(window.camera_dock.geometry().right(),
+                            window.model_dock.geometry().left())
+            self.assertLess(window.model_dock.geometry().right(),
+                            window.controls_dock.geometry().left())
+            window.source_select.setCurrentIndex(5)
+            self.assertEqual(window.tabs.currentIndex(), 5)
+            self.assertTrue(window.model_dock.isVisible())
+            window._place_docks('Model Focus')
+            for _ in range(5):
+                self.app.processEvents()
+            self.assertGreater(window.model_dock.width(), window.camera_dock.width())
+            window.restore_default_layout()
+            for _ in range(5):
+                self.app.processEvents()
+            self.assertGreater(window.camera_dock.width(), window.model_dock.width())
+            window.model_dock.hide()
+        finally:
+            window.close()
+        reopened = MainWindow(None, demo=True)
+        try:
+            reopened.show()
+            self.app.processEvents()
+            self.assertFalse(reopened.model_dock.isVisible())
+            reopened.model_dock.toggleViewAction().trigger()
+            self.assertTrue(reopened.model_dock.isVisible())
+            reopened.restore_default_layout()
+            self.app.processEvents()
+            self.assertTrue(reopened.model_dock.isVisible())
+        finally:
+            reopened.close()
+
     def test_posture_request_rejected_while_moving_or_stopping(self):
         session = SpotSession(None, UiSignals())
+        self.assertFalse(session.apply_posture(5, 0, 0))
+        session.powered = session.armed = True
         self.assertFalse(session.apply_posture(-1, 0, 0))
         self.assertFalse(session.apply_posture(HEIGHT_LIMIT_CM + 1, 0, 0))
         session.set_keys({ord('W')})
@@ -87,6 +145,17 @@ class GuiOfflineTests(unittest.TestCase):
         session.pending = None
         self.assertTrue(session.apply_posture(5, 2, -2))
         self.assertEqual(session.pending[0], 'posture')
+
+    def test_key_release_queues_zero_and_unconfirmed_stand_cannot_drive(self):
+        session = SpotSession(None, UiSignals())
+        session.set_keys({ord('W')})
+        self.assertEqual(session.keys, set())
+        session.powered = session.armed = True
+        session.set_keys({ord('W')})
+        self.assertEqual(session.keys, {ord('W')})
+        session.set_keys({ord('A')}, released=True)
+        self.assertEqual(session.keys, {ord('A')})
+        self.assertEqual(session.pending, 'stop')
 
     def test_stationary_requires_fresh_standing_odometry(self):
         session = SpotSession(None, UiSignals())
