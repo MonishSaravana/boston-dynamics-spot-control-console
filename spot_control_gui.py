@@ -138,9 +138,11 @@ class UiSignals(QObject):
 class SpotSession:
     """Own all command RPCs on one thread; UI only changes the requested state."""
 
-    def __init__(self, hostname, signals):
+    def __init__(self, hostname, signals, username=None, password=None):
         self.hostname = hostname
         self.signals = signals
+        self.username = username
+        self.password = password
         self.lock = threading.Lock()
         self.wakeup = threading.Event()
         self.closing = threading.Event()
@@ -315,10 +317,16 @@ class SpotSession:
 
     def _run(self):
         try:
-            self.signals.status.emit('Connecting and authenticating (watch Terminal for prompts)…')
+            self.signals.status.emit(
+                'Connecting and authenticating…' if self.username is not None else
+                'Connecting and authenticating (watch Terminal for prompts)…')
             sdk = bosdyn.client.create_standard_sdk('SpotControlGUI')
             self.robot = sdk.create_robot(self.hostname)
-            bosdyn.client.util.authenticate(self.robot)
+            if self.username is not None and self.password is not None:
+                self.robot.authenticate(self.username, self.password)
+                self.password = None
+            else:
+                bosdyn.client.util.authenticate(self.robot)
             self.robot.time_sync.wait_for_sync(timeout_sec=10)
             image_client = self.robot.ensure_client(ImageClient.default_service_name)
             available = {source.name for source in image_client.list_image_sources(timeout=2)}
@@ -477,6 +485,7 @@ class SpotSession:
                 self.gesture_motion = 0
             self.signals.failed.emit(f'{type(exc).__name__}: {exc}')
         finally:
+            self.password = None
             self.closing.set()
             if self.client is not None and self.powered:
                 try:
@@ -680,9 +689,14 @@ class SpotSession:
             except Exception as exc:
                 if self.closing.is_set():
                     return
-                self.signals.failed.emit(f'Camera/connection problem: {exc}')
+                with self.lock:
+                    self.keys.clear()
+                    self.armed = False
+                    self.gesture_mode = False
+                    self.gesture_motion = 0
                 self.closing.set()
                 self.wakeup.set()
+                self.signals.failed.emit(f'Camera/connection problem: {exc}')
                 return
 
 

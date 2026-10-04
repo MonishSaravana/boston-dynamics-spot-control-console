@@ -199,6 +199,20 @@ class GuiOfflineTests(unittest.TestCase):
         self.assertTrue(any('Could not align' in s for s in statuses))
         self.assertEqual(failures, [])
 
+    def test_camera_failure_disarms_before_reporting_failure(self):
+        signals = UiSignals()
+        session = SpotSession(None, signals)
+        session.powered = session.armed = True
+        session.keys = {ord('W')}
+        reported = []
+        signals.failed.connect(lambda message: reported.append(
+            (message, session.armed, set(session.keys), session.closing.is_set())))
+        session._camera_loop(Mock(get_image=Mock(side_effect=RuntimeError('camera lost'))))
+        self.assertEqual(len(reported), 1)
+        self.assertFalse(reported[0][1])
+        self.assertEqual(reported[0][2], set())
+        self.assertTrue(reported[0][3])
+
 
 if __name__ == '__main__':
     unittest.main()

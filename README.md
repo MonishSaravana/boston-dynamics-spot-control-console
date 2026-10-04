@@ -1,12 +1,13 @@
 # Boston Dynamics Spot Control Console (SCOPE)
 
-**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop app displays Spot's built-in fisheye cameras and requests power, stand, movement, and standing-posture commands through the Spot SDK. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Those perception commands do not connect to Spot's control path. Local object queries now accept ordinary phrases, refine supported regions into masks, and track them between detector refreshes. On six held-out public rooms, the default localized 16 of 25 annotated targets and accepted 6 of 119 annotation-level negatives. Real Spot multi-camera perception remains untested.
+**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop and local browser consoles display Spot's built-in fisheye cameras and request power, stand, movement, and standing-posture commands through the Spot SDK. The browser console runs on the operator's laptop at `127.0.0.1`; it has an offline demo and a launcher that updates one managed installation from GitHub before starting. The browser control path has not been tested on a live robot. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Those perception commands do not connect to Spot's control path. Local object queries now accept ordinary phrases, refine supported regions into masks, and track them between detector refreshes. On six held-out public rooms, the default localized 16 of 25 annotated targets and accepted 6 of 119 annotation-level negatives. Real Spot multi-camera perception remains untested.
 
 The front panorama is an approximate stitch of two cameras. The robot mesh displays fresh measured joint positions when available; the posture controls show requested offsets. SCOPE is an independent project, not an official or endorsed Boston Dynamics product.
 
 ## Contents
 
 - [Install](#install)
+- [Local browser console](#local-browser-console)
 - [Run with the class E-stop](#run-with-the-class-e-stop)
 - [Controls and views](#controls-and-views)
 - [Offline demo and screenshots](#offline-demo-and-screenshots)
@@ -22,9 +23,24 @@ The front panorama is an approximate stitch of two cameras. The robot mesh displ
 
 ## Install
 
+### Local browser console on macOS
+
+From [GitHub](https://github.com/MonishSaravana/boston-dynamics-spot-control-console), choose **Code → Download ZIP**, extract it, and run `Open SCOPE.command` from the extracted folder. For a first run from Terminal, use:
+
+```sh
+cd /path/to/extracted/boston-dynamics-spot-control-console
+zsh "Open SCOPE.command"
+```
+
+The first run needs Git, Python 3.11–3.14, and an Internet connection. The launcher clones this repository to `~/Library/Application Support/SCOPE/source`, creates a separate console environment at `~/Library/Application Support/SCOPE/venv`, and opens the local browser page. It also creates `~/Applications/Open SCOPE.command` for later launches. Re-running setup from another downloaded ZIP uses the same installation. On each launch it checks GitHub's `main` branch, fast-forwards the one checkout when possible, and reinstalls console dependencies only when the requirements or Python version changed. An update failure leaves the installed source in place and reports the problem before a live connection starts; if dependency installation fails, the console does not start. The repository excludes the SDK checkout, model bundles, credentials, and camera captures.
+
+The update logic was checked against a temporary Git repository on macOS Apple Silicon; a fresh GitHub installation has not been run in this workspace. The official class E-stop remains a separate process and setup. The SDK base URDF is also separate; the browser's model panel reports when that mesh is unavailable. Gesture mode needs MediaPipe and the local model bundles described below.
+
+### Existing desktop console
+
 Use the existing `.venv` and `spot-sdk` checkout in this workspace. The installed environment was checked with Python 3.14.2, Spot SDK 5.2.0, PySide6 6.11.2, Pillow 12.3.0, OpenCV 5.0.0.93, and MediaPipe 0.10.35. The app does not import SciPy from the SDK image-viewer example.
 
-### macOS Apple Silicon
+#### macOS Apple Silicon
 
 In Terminal, from this workspace:
 
@@ -36,7 +52,7 @@ python -c 'import bosdyn.client, PySide6, PIL, cv2, mediapipe; print("Dependenci
 
 If that import fails in a fresh environment, install only the missing package into `.venv`. The app uses `bosdyn-client==5.2.0`, `PySide6==6.11.2`, Pillow, `opencv-contrib-python==5.0.0.93`, NumPy, and optional `mediapipe==0.10.35` for gesture mode. The local SDK's `python/examples/wasd/requirements.txt` and `python/examples/get_image/requirements.txt` were inspected; SciPy is only needed by the latter example, not this app.
 
-### Optional gesture models
+#### Optional gesture models
 
 Gesture mode needs two local MediaPipe bundles. Download them from Google's model pages and save them with these names under `models/`:
 
@@ -46,6 +62,26 @@ Gesture mode needs two local MediaPipe bundles. Download them from Google's mode
 | [Pose Landmarker Lite](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker#models) | `pose_landmarker_lite.task` |
 
 The rest of the GUI runs without them; gesture mode cannot start if they are missing. The bundles are excluded from this repository while their redistribution terms are reviewed.
+
+## Local browser console
+
+From this workspace, preview the browser interface without a robot:
+
+```sh
+.venv/bin/python scope_web.py --demo
+```
+
+The console opens at a local `http://127.0.0.1` address. Demo mode makes no robot client, authentication, lease, network request to Spot, or robot command. Its grayscale scenes are generated test artwork, not Spot camera captures. Power, Stand, movement, posture Apply, and gesture mode are disabled. If the separate SDK base URDF ZIP is present, the model shows its simulated zero configuration; otherwise it reports that the mesh is unavailable.
+
+For the live connection screen, run:
+
+```sh
+.venv/bin/python scope_web.py
+```
+
+Enter Spot's confirmed address and credentials in the local page after starting the separate class E-stop. The password is used for that connection and is not saved. The server listens on the laptop's loopback address only; another laptop cannot open it. The browser offers the same 0.05–0.35 m/s speed request range and standing-posture request limits as the desktop console. Hold W/A/S/D, arrow keys, or a direction button to drive after fresh standing state is confirmed. Key release requests zero velocity. A lost browser heartbeat clears held input after 0.30 seconds; the SDK movement command itself expires after 0.35 seconds. Focus loss, tab hiding, Stop, connection failure, and shutdown also request zero velocity. The browser path has only been checked offline; live robot behavior remains unverified.
+
+The browser's **STOP MOVEMENT** button is a zero-velocity request, not the class E-stop. Keep the class E-stop available as directed by your instructor. The SDK's [GUI E-stop example](https://dev.bostondynamics.com/python/examples/estop/readme) is a separate option if the class procedure allows it. This repository does not redistribute that SDK example.
 
 ## Run with the class E-stop
 

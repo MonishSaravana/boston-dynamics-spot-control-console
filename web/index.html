@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="scope-token" content="__SCOPE_TOKEN__" />
+    <title>SCOPE | Spot control console</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand" aria-label="SCOPE">
+          <div class="brand-mark">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div><strong>SCOPE</strong><small>Spot control console</small></div>
+        </div>
+        <div class="header-state" role="status" aria-live="polite">
+          <span id="mode-pill" class="mode-pill">LOCAL</span>
+          <span id="state-dot" class="state-dot"></span>
+          <span id="state-title">Loading console…</span>
+        </div>
+        <button
+          id="stop-button"
+          class="stop-button"
+          type="button"
+          title="Request zero velocity and clear held input. The class E-stop is separate."
+        >
+          <span class="stop-icon" aria-hidden="true"></span> STOP MOVEMENT
+        </button>
+      </header>
+
+      <div class="connection-strip">
+        <div>
+          <span class="eyebrow">CONNECTION</span>
+          <p id="connection-message">Loading local console…</p>
+        </div>
+        <div class="connection-actions">
+          <button id="demo-button" class="text-button" type="button">
+            Try offline demo</button
+          ><button
+            id="connect-button"
+            class="button button-outline"
+            type="button"
+          >
+            Connect to Spot
+          </button>
+        </div>
+      </div>
+
+      <main class="dashboard">
+        <section class="visual-column" aria-label="Camera and robot model">
+          <article class="card camera-card">
+            <div class="card-head">
+              <div>
+                <span class="eyebrow">OBSERVE</span>
+                <h1>Built-in cameras</h1>
+              </div>
+              <div class="head-actions">
+                <label class="select-label" for="camera-select">View</label>
+                <select id="camera-select" aria-label="Camera view">
+                  <option value="frontleft_fisheye_image">Front left</option>
+                  <option value="frontright_fisheye_image">Front right</option>
+                  <option value="left_fisheye_image">Left</option>
+                  <option value="right_fisheye_image">Right</option>
+                  <option value="back_fisheye_image">Back</option>
+                  <option value="split">All cameras</option>
+                  <option value="panorama">Front panorama</option>
+                </select>
+              </div>
+            </div>
+            <div id="camera-single" class="camera-stage">
+              <img
+                id="camera-image"
+                alt="Selected built-in camera feed"
+                hidden
+              />
+              <div id="camera-empty" class="camera-empty">
+                Connect to see camera images
+              </div>
+              <span id="image-badge" class="image-badge">SIMULATED</span>
+              <div class="image-bottom">
+                <strong id="image-title">Front left</strong
+                ><span id="image-meta">Waiting for image</span>
+              </div>
+            </div>
+            <div id="camera-split" class="camera-split" hidden></div>
+            <div class="camera-foot">
+              <p id="camera-caption">Camera feed status appears here.</p>
+              <div id="panorama-tools" class="panorama-tools" hidden>
+                <label
+                  ><input id="auto-panorama" type="checkbox" checked /> Auto
+                  refresh</label
+                >
+                <button id="stitch-button" class="text-button" type="button">
+                  Stitch once
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <article class="card model-card">
+            <div class="card-head">
+              <div>
+                <span class="eyebrow">REFERENCE</span>
+                <h2>Robot model</h2>
+              </div>
+              <span class="model-tag">READ ONLY</span>
+            </div>
+            <div class="model-body">
+              <img
+                id="model-image"
+                alt="Read-only SDK robot geometry or its unavailable state"
+              />
+              <div class="model-copy">
+                <strong id="model-status">Waiting for model</strong>
+                <p>
+                  Joint geometry follows fresh measured state only when the
+                  robot skeleton matches the local SDK mesh. The grid is in the
+                  body frame, not the floor.
+                </p>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <section class="controls-column" aria-label="Robot controls">
+          <article class="card control-card">
+            <div class="card-head">
+              <div>
+                <span class="eyebrow">CONTROL</span>
+                <h2>Robot movement</h2>
+              </div>
+              <span id="drive-state" class="small-state">LOCKED</span>
+            </div>
+            <div class="power-row">
+              <button
+                id="power-button"
+                class="button button-outline"
+                type="button"
+              >
+                Power On</button
+              ><button
+                id="stand-button"
+                class="button button-primary"
+                type="button"
+              >
+                Stand
+              </button>
+            </div>
+            <div class="drive-divider"></div>
+            <div class="drive-layout">
+              <div
+                class="direction-pad"
+                aria-label="Hold direction buttons to move"
+              >
+                <button
+                  type="button"
+                  data-direction="w"
+                  class="direction up"
+                  aria-label="Hold to move forward"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  data-direction="a"
+                  class="direction left"
+                  aria-label="Hold to move left"
+                >
+                  ←
+                </button>
+                <button
+                  type="button"
+                  data-direction="s"
+                  class="direction down"
+                  aria-label="Hold to move backward"
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  data-direction="d"
+                  class="direction right"
+                  aria-label="Hold to move right"
+                >
+                  →
+                </button>
+                <div class="direction-center">HOLD</div>
+              </div>
+              <div class="drive-explain">
+                <strong>Hold to move</strong>
+                <p>
+                  Use W/A/S/D, arrow keys, or the buttons. Release to request
+                  zero velocity.
+                </p>
+                <p class="muted">
+                  Driving unlocks after fresh robot state confirms Stand.
+                </p>
+              </div>
+            </div>
+            <div class="slider-head">
+              <label for="speed">Speed limit</label
+              ><output id="speed-value" for="speed">0.20 m/s</output>
+            </div>
+            <input
+              id="speed"
+              type="range"
+              min="5"
+              max="35"
+              step="1"
+              value="20"
+            />
+            <div class="range-labels">
+              <span>0.05 m/s</span><span>0.35 m/s</span>
+            </div>
+            <p class="control-note">
+              Motion commands expire after 0.35 s without updates. STOP MOVEMENT
+              requests zero velocity; it does not operate the class E-stop.
+            </p>
+          </article>
+
+          <article class="card posture-card">
+            <div class="card-head">
+              <div>
+                <span class="eyebrow">STAND REQUEST</span>
+                <h2>Standing posture</h2>
+              </div>
+            </div>
+            <p class="section-intro">
+              These sliders change a request. Apply sends a high-level stand
+              command only after a fresh stationary check.
+            </p>
+            <div class="setting">
+              <div class="slider-head">
+                <label for="height">Height offset</label
+                ><output id="height-value" for="height">+0 cm</output>
+              </div>
+              <input
+                id="height"
+                type="range"
+                min="0"
+                max="10"
+                step="1"
+                value="0"
+              />
+              <div class="range-labels">
+                <span>0 cm</span><span>+10 cm</span>
+              </div>
+            </div>
+            <div class="setting">
+              <div class="slider-head">
+                <label for="roll">Roll</label
+                ><output id="roll-value" for="roll">0°</output>
+              </div>
+              <input
+                id="roll"
+                type="range"
+                min="-5"
+                max="5"
+                step="1"
+                value="0"
+              />
+              <div class="range-labels"><span>−5°</span><span>+5°</span></div>
+            </div>
+            <div class="setting">
+              <div class="slider-head">
+                <label for="pitch">Pitch</label
+                ><output id="pitch-value" for="pitch">0°</output>
+              </div>
+              <input
+                id="pitch"
+                type="range"
+                min="-5"
+                max="5"
+                step="1"
+                value="0"
+              />
+              <div class="range-labels"><span>−5°</span><span>+5°</span></div>
+            </div>
+            <button
+              id="apply-button"
+              class="button button-primary wide"
+              type="button"
+            >
+              Apply requested standing posture
+            </button>
+            <p id="posture-message" class="inline-status">
+              Waiting for confirmed Stand.
+            </p>
+          </article>
+
+          <article class="card gesture-card">
+            <div class="card-head">
+              <div>
+                <span class="eyebrow">OPTIONAL</span>
+                <h2>Supervised gesture mode</h2>
+              </div>
+              <label class="switch"
+                ><input
+                  id="gesture-toggle"
+                  type="checkbox"
+                  aria-label="Enable supervised gesture mode" /><span></span
+              ></label>
+            </div>
+            <p id="gesture-message" class="section-intro">
+              OFF • manual keyboard control
+            </p>
+            <p class="muted small">
+              Requires local gesture models and aligned front depth. Gesture
+              mode disables keyboard driving.
+            </p>
+          </article>
+        </section>
+      </main>
+
+      <footer class="safety-footer">
+        <strong>Class E-stop stays separate.</strong> Keep the class E-stop open
+        and within reach during live operation. SCOPE is an independent project,
+        not endorsed by Boston Dynamics.
+      </footer>
+    </div>
+
+    <dialog id="connect-dialog" class="connect-dialog">
+      <form id="connect-form" method="dialog">
+        <div class="dialog-head">
+          <span class="eyebrow">LIVE CONNECTION</span
+          ><button
+            id="close-dialog"
+            type="button"
+            aria-label="Close connection form"
+          >
+            ×
+          </button>
+        </div>
+        <h2>Connect to Spot</h2>
+        <p>
+          Connect this laptop to Spot's network and confirm the robot address
+          with your instructor. Start the separate class E-stop first.
+        </p>
+        <label
+          >Robot address<input
+            id="robot-host"
+            name="host"
+            type="text"
+            placeholder="192.168.80.3"
+            autocomplete="off"
+            required
+        /></label>
+        <label
+          >Username<input
+            id="robot-user"
+            name="username"
+            type="text"
+            autocomplete="username"
+            required
+        /></label>
+        <label
+          >Password<input
+            id="robot-password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+        /></label>
+        <p id="connect-error" class="dialog-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button
+            id="cancel-connect"
+            type="button"
+            class="button button-outline"
+          >
+            Cancel</button
+          ><button type="submit" class="button button-primary">Connect</button>
+        </div>
+        <p class="dialog-note">
+          Credentials are used for this connection and are not written to disk.
+        </p>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="alert" hidden></div>
+  </body>
+</html>
