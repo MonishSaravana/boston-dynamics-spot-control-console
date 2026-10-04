@@ -57,6 +57,7 @@ class ModuleState:
     durations_ms: deque = field(default_factory=lambda: deque(maxlen=10000))
     cpu_ms: deque = field(default_factory=lambda: deque(maxlen=10000))
     success_times_s: deque = field(default_factory=lambda: deque(maxlen=10000))
+    success_host_times_s: deque = field(default_factory=lambda: deque(maxlen=10000))
     recent_failures: deque = field(default_factory=lambda: deque(maxlen=8))
 
 
@@ -112,6 +113,9 @@ class Runtime:
 
     def run(self, name, timestamp_s, function, *, input_s=None, source=None,
             host_receive_s=None, scheduled=True):
+        if not self.state(name).config.enabled:
+            self.mark(name,Health.DISABLED,"Disabled by runtime configuration")
+            return None
         if scheduled and not self.due(name, timestamp_s):
             return None
         state = self.state(name)
@@ -137,6 +141,7 @@ class Runtime:
         state.last_output = output
         state.last_success_s = timestamp_s
         state.success_times_s.append(timestamp_s)
+        state.success_host_times_s.append(state.host_complete_monotonic_s)
         state.successes += 1
         self.mark(name, Health.OK, "Fresh output")
         return output
@@ -153,6 +158,8 @@ class Runtime:
                 status, reason = Health.STALE, "Last valid output exceeded its age limit"
             times = state.success_times_s
             rate = (len(times)-1)/(times[-1]-times[0]) if len(times)>1 and times[-1]>times[0] else None
+            host_times = state.success_host_times_s
+            host_rate = (len(host_times)-1)/(host_times[-1]-host_times[0]) if len(host_times)>1 and host_times[-1]>host_times[0] else None
             result[name] = {
                 "status": str(status), "reason": reason, "source": state.source,
                 "config": asdict(state.config), "last_success_source_s": state.last_success_s,
@@ -160,9 +167,9 @@ class Runtime:
                 "input_age_s": None if state.input_timestamp_s is None else max(0., now_s-state.input_timestamp_s),
                 "host_receive_monotonic_s": state.host_receive_monotonic_s,
                 "host_complete_monotonic_s": state.host_complete_monotonic_s,
-                "host_end_to_end_ms": None if state.host_receive_monotonic_s is None else
+                "host_end_to_end_ms": None if state.host_receive_monotonic_s is None or state.host_complete_monotonic_s is None else
                     (state.host_complete_monotonic_s-state.host_receive_monotonic_s)*1000,
-                "source_update_hz": rate, "latency": distribution(state.durations_ms),
+                "source_update_hz": rate, "host_update_hz":host_rate, "latency": distribution(state.durations_ms),
                 "cpu": distribution(state.cpu_ms), "gpu_inference_ms": None,
                 "successes": state.successes, "failures": state.failures,
                 "restarts": state.restarts, "dropped_inputs": state.dropped_inputs,
@@ -224,9 +231,12 @@ class LatestWorker:
         with self.condition:
             return int(self.pending is not None)
 
-    def close(self):
+    def close(self,timeout_s=.1):
         with self.condition:
             self.closed = True
             self.pending = None
             self.condition.notify()
-        self.thread.join(timeout=.1)
+        self.thread.join(timeout=timeout_s)
+        if self.thread.is_alive():
+            log.warning("Inference worker still finishing after shutdown timeout")
+        return not self.thread.is_alive()

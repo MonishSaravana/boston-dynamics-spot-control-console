@@ -12,12 +12,35 @@ from .objects import project_object
 from .person_tracking import PersonTracker, fuse_views
 from .pointing import estimate_pointing, score_targets
 from .runtime import Health, LatestWorker, ModuleConfig, Runtime
-from .truth import SyntheticTruthDetector
-from .synthetic import room_boxes
+from .truth import SyntheticTruthDetector,semantic_identity
+from .synthetic import room_boxes,cast_boxes
 
 MODULES = ("mapping", "semantic_detection", "human_pose", "lifting", "fusion", "tracking",
-           "pointing", "intersection", "world_entities", "memory", "robot_visualization",
-           "map_visualization", "rerun", "visualization", "decode")
+           "pointing", "intersection", "world_entities", "memory", "memory_persist", "robot_visualization",
+           "map_visualization", "rerun", "visualization", "decode", "hand_pose")
+
+
+class VisibleRoomDetector(SyntheticTruthDetector):
+    """Exclude pixels where the simulated human occludes the semantic room."""
+    def detect(self,frame):
+        from .objects import ObjectObservation2D
+        K = frame.intrinsics
+        vv,uu = np.mgrid[:K.height,:K.width]
+        rays = np.column_stack(((uu.ravel()-K.cx)/K.fx,(vv.ravel()-K.cy)/K.fy,np.ones(uu.size)))
+        world = rays@frame.T_world_camera[:3,:3].T
+        expected,part_ids = cast_boxes(np.broadcast_to(frame.T_world_camera[:3,3],world.shape),world,self.boxes)
+        visible = np.nan_to_num(frame.depth_m,nan=0.)>=expected.reshape(K.height,K.width)-.12
+        result = []
+        for tag in dict.fromkeys(semantic_identity(part.name) for part in self.boxes):
+            if tag is None:
+                continue
+            identity,label = tag
+            indices = [i for i,part in enumerate(self.boxes) if semantic_identity(part.name)==tag]
+            mask = np.isin(part_ids,indices).reshape(K.height,K.width)&visible
+            if mask.sum()>=12:
+                result.append(ObjectObservation2D(f"{frame.frame_id}:{identity}",frame.frame_id,
+                    mask,{label:1.},1.,self.name,identity))
+        return result
 
 
 class HumanPipeline:
@@ -31,6 +54,7 @@ class HumanPipeline:
         defaults = {n:ModuleConfig() for n in MODULES}
         defaults["robot_visualization"] = ModuleConfig(enabled=False)
         defaults["decode"] = ModuleConfig(enabled=False)  # source-dependent instrumentation
+        defaults["hand_pose"] = ModuleConfig(enabled=False)
         for c in cameras:
             defaults[f"camera/{c}"] = ModuleConfig()
             defaults[f"depth/{c}"] = ModuleConfig()
@@ -38,8 +62,12 @@ class HumanPipeline:
             defaults[f"semantic/{c}"] = ModuleConfig()
         defaults.update(configs or {})
         self.runtime = Runtime(defaults)
+        if pose_detector is not None and hasattr(pose_detector,"hand_runtime"):
+            self.runtime.modules["hand_pose"] = pose_detector.hand_runtime.state("hand_pose")
+            if configs and "hand_pose" in configs:
+                self.runtime.configure("hand_pose",configs["hand_pose"])
         self.cameras,self.pose_detector = tuple(cameras),pose_detector
-        self.semantic_detector = semantic_detector or SyntheticTruthDetector(room_boxes())
+        self.semantic_detector = semantic_detector or VisibleRoomDetector(room_boxes())
         self.mapping = VoxelMap(map_config or MapConfig.synthetic())
         self.entities = EntityStore()
         self.tracker = PersonTracker()
@@ -78,6 +106,7 @@ class HumanPipeline:
         state.last_output,state.last_success_s = value,old_s
         state.input_timestamp_s = old_s
         state.success_times_s.append(old_s)
+        state.success_host_times_s.append(time.monotonic())
         state.successes += 1
         if timestamp-old_s>state.config.stale_after_s or not state.config.enabled:
             rt.mark(name,Health.STALE,"Inference result expired before consumption")
@@ -88,6 +117,7 @@ class HumanPipeline:
     def step(self,samples,timestamp_s):
         rt = self.runtime
         active,poses,detections = [],[],{}
+        completed_times = {"human_pose":[],"semantic_detection":[]}
         semantics_due = rt.due("semantic_detection",timestamp_s)
         humans_due = rt.due("human_pose",timestamp_s)
         for sample in samples:
@@ -100,20 +130,19 @@ class HumanPipeline:
                 frame = replace(frame,depth_m=np.full_like(frame.depth_m,np.nan))
                 sample = replace(sample,frame=frame)
             active.append(sample)
-            rt.run("mapping",timestamp_s,lambda:self.mapping.integrate(frame),source=frame.source,
-                   scheduled=True)
             if semantics_due:
                 found = self._infer(f"semantic/{c}",timestamp_s,sample,
                     lambda x:self.semantic_detector.detect(x.frame),self.semantic_detector.name)
                 if found is not None:
                     used,objects = found
+                    completed_times["semantic_detection"].append(used.frame.timestamp_s)
                     projected = rt.run("entity_projection",timestamp_s,
                         lambda:[p for o in objects if (p:=project_object(used.frame,o)) is not None],
-                        input_s=used.frame.timestamp_s,scheduled=False)
+                        input_s=used.frame.timestamp_s)
                     if projected is not None:
                         rt.run("world_entities",timestamp_s,lambda:self.entities.add_frame(projected),
                                input_s=used.frame.timestamp_s)
-                        detections[c] = (objects,projected)
+                        detections[c] = (used.frame,objects,projected)
             if humans_due:
                 function = (lambda x:self.pose_detector.detect(x.frame,x.camera_id)) if self.pose_detector else (
                     lambda x:x.observations)
@@ -121,24 +150,41 @@ class HumanPipeline:
                     self.pose_detector.name if self.pose_detector else "oracle-visible-joints")
                 if result is not None:
                     used,observations = result
+                    completed_times["human_pose"].append(used.frame.timestamp_s)
                     lifted = rt.run("lifting",timestamp_s,
                         lambda:[lift_pose(o,used.frame) for o in observations],
-                        input_s=used.frame.timestamp_s,scheduled=False)
+                        input_s=used.frame.timestamp_s)
                     if lifted is not None:
                         poses.extend(lifted)
+        if active:
+            def integrate_active():
+                count = sum(self.mapping.integrate(s.frame,stream_id=s.camera_id) for s in active)
+                if not count:
+                    raise ValueError("; ".join(self.mapping.rejected[-len(active):]))
+                return count
+            integrated = rt.run("mapping",timestamp_s,integrate_active,source=active[0].frame.source)
+            if integrated is not None and integrated<len(active):
+                rt.mark("mapping",Health.DEGRADED,"Some camera frames rejected: "+self.mapping.rejected[-1])
         present = {s.camera_id for s in samples}
         for c in self.cameras:
             if c not in present and rt.state(f"camera/{c}").config.enabled:
                 rt.mark(f"camera/{c}",Health.UNAVAILABLE,"Camera input missing")
         # Aggregate health is derived from camera stages, not fabricated success.
+        current_health = rt.snapshot(timestamp_s)
         for aggregate,prefix,enabled in (("human_pose","pose",humans_due),
                                           ("semantic_detection","semantic",semantics_due)):
             if enabled:
-                statuses = [rt.snapshot(timestamp_s)[f"{prefix}/{s.camera_id}"]["status"] for s in active]
-                bad_camera = any(rt.snapshot(timestamp_s)[f"camera/{c}"]["status"]!="OK" for c in self.cameras)
+                statuses = [current_health[f"{prefix}/{s.camera_id}"]["status"] for s in active]
+                bad_camera = any(current_health[f"camera/{c}"]["status"]!="OK" for c in self.cameras)
                 if "OK" in statuses:
                     state = rt.state(aggregate)
-                    state.last_success_s = timestamp_s
+                    if completed_times[aggregate]:
+                        source_s = max(completed_times[aggregate])
+                        state.last_success_s = source_s
+                        state.input_timestamp_s = source_s
+                        state.success_times_s.append(source_s)
+                        state.success_host_times_s.append(time.monotonic())
+                        state.successes += 1
                     rt.mark(aggregate,Health.DEGRADED if bad_camera or any(v!="OK" for v in statuses)
                             else Health.OK,"Some streams unavailable" if bad_camera else "Camera inference health")
                 else:
@@ -150,9 +196,11 @@ class HumanPipeline:
             fused,unresolved_views = fused
             if unresolved_views:
                 rt.mark("fusion",Health.DEGRADED,"Person association unresolved across views")
+                uncertain_ids = {i for group in unresolved_views for i in group}
+                fused = [p for p in fused if not uncertain_ids.intersection(p.observation_ids)]
         tracks = rt.run("tracking",timestamp_s,lambda:self.tracker.update(fused or [],timestamp_s))
         self.tracker.expire(timestamp_s)
-        tracks = tracks if tracks is not None else list(self.tracker.tracks.values())
+        tracks = tracks if tracks is not None else []
         hypotheses = rt.run("pointing",timestamp_s,
             lambda:[estimate_pointing(t,timestamp_s) for t in tracks]) if rt.state("human_pose").config.enabled else None
         hypotheses = hypotheses or []
@@ -168,9 +216,11 @@ class HumanPipeline:
         if active and rt.state("memory").config.enabled:
             primary = active[0]
             if primary.camera_id in detections:
-                objects,projected = detections[primary.camera_id]
+                used_frame,objects,projected = detections[primary.camera_id]
                 def collect():
-                    self.memory_frames.append(primary.frame)
+                    if self.memory_frames and used_frame.timestamp_s<=self.memory_frames[-1].timestamp_s:
+                        return dict(self.memory_status)
+                    self.memory_frames.append(used_frame)
                     self.memory_detections.append(objects)
                     self.memory_projections.append(projected)
                     self.memory_status["frames"] = len(self.memory_frames)
@@ -215,5 +265,5 @@ class HumanPipeline:
             memory.close()
 
     def close(self):
-        for worker in self.workers.values():
-            worker.close()
+        finished = [worker.close(timeout_s=5.) for worker in self.workers.values()]
+        return all(finished)

@@ -34,6 +34,22 @@ def estimate_pointing(track, now_s, samples=256, seed=4):
             np.empty((0,3)),np.empty((0,3)),track.pose.observation_ids,0.,"ABSTAIN",reason)
     if track.state!="VISIBLE" or now_s-track.last_seen_s>.25:
         return abstain("Person not freshly associated/observed")
+    for side,quality in sorted(track.pose.hand_quality.items(),key=lambda v:-v[1]):
+        base,tip = [track.pose.joints[f"{side}_index_{n}"] for n in ("mcp","tip")]
+        if quality<.60 or any(j.position is None or now_s-j.timestamp_s>.20 for j in (base,tip)):
+            continue
+        length = np.linalg.norm(tip.position-base.position)
+        if not .035<=length<=.16:
+            continue
+        direction = _unit(tip.position-base.position)
+        rng = np.random.default_rng(seed)
+        origins = rng.multivariate_normal(tip.position,tip.covariance,size=samples)
+        bases = rng.multivariate_normal(base.position,base.covariance,size=samples)
+        directions = _unit(origins-bases+rng.normal(0.,length*np.deg2rad(12.)/np.sqrt(2),(samples,3)))
+        spread = float(np.sqrt(np.mean(np.arccos(np.clip(directions@direction,-1,1))**2)))
+        return PointingHypothesis(track.person_id,now_s,side,tip.position,tip.covariance,direction,
+            spread,origins,directions,track.pose.observation_ids,quality,"DEGRADED",
+            "Estimated extended index with curled fingers; short baseline uncertainty")
     options = []
     for side in ("left","right"):
         s,e,w = [track.pose.joints[f"{side}_{n}"] for n in ("shoulder","elbow","wrist")]
@@ -118,7 +134,9 @@ def surface_hits(hypothesis,mapping,max_distance_m=6.):
     # Measured occupied voxels from M1, never analytic synthetic box surfaces.
     occupied = mapping.states()==2
     distances = np.full(len(hypothesis.directions),np.inf)
-    for step in np.arange(.05,max_distance_m,cfg.voxel_m/2):
+    # Ignore the immediate wrist/body voxel, whose occupied surface surrounds
+    # the pointing origin. Near-field targets inside 20 cm are not supported.
+    for step in np.arange(.20,max_distance_m,cfg.voxel_m/2):
         points = hypothesis.origins+hypothesis.directions*step
         indices = np.floor((points-np.asarray(cfg.origin))/cfg.voxel_m).astype(int)
         valid = np.all((indices>=0)&(indices<cfg.shape),axis=1)&~np.isfinite(distances)
@@ -142,7 +160,10 @@ def score_targets(hypothesis,entities,mapping=None,max_distance_m=6.):
     surfaces,points = surface_hits(hypothesis,mapping,max_distance_m)
     best = np.full(len(hypothesis.directions),max_distance_m)
     winners = np.full(len(best),"unknown",dtype=object)
+    ages = {e.entity_id:max(0.,hypothesis.timestamp_s-e.last_seen_s) for e in entities}
     for entity in entities:
+        if ages[entity.entity_id]>.5:
+            continue
         extent = np.sqrt(np.maximum(np.diag(entity.covariance),0.))
         padding = np.clip(extent,.015,.08)
         distances = ray_box(hypothesis.origins,hypothesis.directions,
@@ -153,4 +174,5 @@ def score_targets(hypothesis,entities,mapping=None,max_distance_m=6.):
     scores["unknown"] = float(np.mean(winners=="unknown"))
     return {"scores":dict(sorted(scores.items(),key=lambda item:-item[1])),
             "surface_points_m":points.tolist(),"state":hypothesis.state,
+            "entity_data_age_s":ages,"stale_entities_excluded":[k for k,v in ages.items() if v>.5],
             "score_kind":"sampled geometric hit fraction"}

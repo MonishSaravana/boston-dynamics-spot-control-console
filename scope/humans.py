@@ -1,6 +1,6 @@
 """Typed camera observations and robust depth lifting. No model or robot imports."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass,field
 from enum import StrEnum
 from typing import Protocol
 
@@ -12,10 +12,13 @@ JOINTS = ("nose", "left_eye", "right_eye", "left_ear", "right_ear",
           "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
           "left_wrist", "right_wrist", "left_hip", "right_hip", "left_knee",
           "right_knee", "left_ankle", "right_ankle")
+HAND_JOINTS = tuple(f"{s}_index_{n}" for s in ("left","right") for n in ("mcp","pip","tip"))
 BONES = tuple((f"{side}_{a}", f"{side}_{b}") for side in ("left", "right")
               for a,b in (("shoulder","elbow"), ("elbow","wrist"),
                           ("shoulder","hip"), ("hip","knee"), ("knee","ankle"))) + (
     ("left_shoulder", "right_shoulder"), ("left_hip", "right_hip"))
+BONES += tuple((f"{side}_{a}",f"{side}_{b}") for side in ("left","right")
+               for a,b in (("wrist","index_mcp"),("index_mcp","index_pip"),("index_pip","index_tip")))
 
 
 class JointState(StrEnum):
@@ -42,6 +45,7 @@ class PersonObservation2D:
     box_xyxy: tuple[float, float, float, float]
     confidence: float
     detector: str
+    hand_quality: dict[str,float] = field(default_factory=dict)
 
     def validate(self, frame):
         if self.frame_id != frame.frame_id or abs(self.timestamp_s-frame.timestamp_s)>1e-6:
@@ -73,6 +77,7 @@ class HumanPoseObservation:
     joints: dict[str, HumanJoint3D]
     source_cameras: tuple[str, ...]
     confidence: float
+    hand_quality: dict[str,float] = field(default_factory=dict)
 
 
 class HumanPoseDetector(Protocol):
@@ -86,7 +91,7 @@ def lift_pose(observation: PersonObservation2D, frame: RgbdFrame,
     observation.validate(frame)
     K, R = frame.intrinsics, frame.T_world_camera[:3,:3]
     joints = {}
-    for name in JOINTS:
+    for name in JOINTS+HAND_JOINTS:
         keypoint = observation.keypoints.get(name)
         reason = "Joint not detected"
         point = covariance = None
@@ -134,4 +139,4 @@ def lift_pose(observation: PersonObservation2D, frame: RgbdFrame,
                 joints[child.name] = HumanJoint3D(child.name,None,None,0.,JointState.UNAVAILABLE,
                     child.timestamp_s,(),"Implausible arm segment; depth/pose outlier")
     return HumanPoseObservation((observation.observation_id,),frame.timestamp_s,joints,
-                                (observation.camera_id,),observation.confidence)
+                                (observation.camera_id,),observation.confidence,observation.hand_quality)

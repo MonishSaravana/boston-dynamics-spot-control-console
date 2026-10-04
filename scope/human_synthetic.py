@@ -29,7 +29,7 @@ class HumanCameraSample:
 
 def skeleton(target=None, shift=None, pointing=True):
     shift = np.zeros(3) if shift is None else np.asarray(shift)
-    target = np.array([1.02,.52,.82]) if target is None else np.asarray(target)
+    target = (np.array([1.02,.52,.82]) if target is None else np.asarray(target))-shift
     result = {"left_shoulder":np.array([-.55,-.60,1.45]),
               "right_shoulder":np.array([-.19,-.60,1.45]),
               "left_hip":np.array([-.51,-.60,.92]),"right_hip":np.array([-.23,-.60,.92]),
@@ -49,13 +49,14 @@ def skeleton(target=None, shift=None, pointing=True):
 
 class HumanScene:
     name = "synthetic-human-room-v1"
-    def __init__(self,frames=24,width=320,cameras=("front","left"),scenario="complete"):
+    def __init__(self,frames=24,width=320,cameras=("front","left"),scenario="complete",distance_m=None):
         if scenario not in SCENARIOS or not cameras or set(cameras)-{"front","left","right"}:
             raise ValueError("Known scenario and at least one virtual camera required")
         self.frames,self.cameras,self.scenario = frames,tuple(cameras),scenario
+        self.distance_m = distance_m
         self.boxes = room_boxes()
         self.K = Intrinsics(width,int(width*.75),width*.85,width*.85,(width-1)/2,(int(width*.75)-1)/2)
-        eyes = {"front":np.array([-.3,-2.35,1.5]),"left":np.array([-2.25,-1.6,1.6]),
+        eyes = {"front":np.array([-.3,-2.35,1.5]),"left":np.array([-2.25,-.15,1.6]),
                 "right":np.array([2.3,-1.6,1.6])}
         self.poses = {c:look_at(eyes[c],np.array([0.,-.1,1.])) for c in cameras}
 
@@ -66,7 +67,11 @@ class HumanScene:
             target = np.array([1.3,-1.,1.7])
         if scenario=="outside_cone":
             target = np.array([1.7,-.6,1.45])
-        people = [skeleton(target,shift=[.01*np.sin(index*.2),0,0],pointing=scenario!="not_pointing")]
+        shift = np.array([.01*np.sin(index*.2),0,0])
+        if self.distance_m is not None:
+            v = target-np.array([-.19,-.60,1.45])
+            shift += v/np.linalg.norm(v)*(np.linalg.norm(v)-.60-self.distance_m)
+        people = [skeleton(target,shift=shift,pointing=scenario!="not_pointing")]
         if scenario in ("two_people","overlapping_people"):
             people.append(skeleton(target,shift=[-.8 if scenario=="two_people" else .04,0,0]))
         if scenario=="brief_exit" and 5<=index<9:

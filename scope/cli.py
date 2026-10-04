@@ -260,6 +260,10 @@ def main(argv: list[str] | None = None) -> int:
     mapping.add_argument("--detector", choices=("truth", "torchvision"))
     mapping.add_argument("--score-threshold", type=float, default=.55)
     mapping.add_argument("--classes", help="Comma-separated model classes to retain")
+    mapping.add_argument("--humans", action="store_true", help="Use modular M4 map/entities/human runtime")
+    from .human_cli import add_human_options, register_human_commands, run_human_command
+    add_human_options(mapping, mapping=True)
+    register_human_commands(commands)
     for name in ("detect", "project-objects", "entities"):
         stage = commands.add_parser(name, help=f"Inspect the {name} semantic stage")
         stage.add_argument("source", choices=("synthetic", "tum", "episode"))
@@ -283,6 +287,12 @@ def main(argv: list[str] | None = None) -> int:
     from .memory_cli import register_memory_commands, run_memory_command
     register_memory_commands(commands)
     args = parser.parse_args(argv)
+    if args.command in ("humans", "pointing", "telemetry", "benchmark-humans", "benchmark-ipo", "spot-sensors") or (
+            args.command == "map" and args.humans):
+        try:
+            return run_human_command(args)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.command == "map":
         if args.frames <= 0 or args.voxel_m <= 0 or args.frame_stride <= 0 or args.width <= 0:
             parser.error("frame count, stride, width and voxel size must be positive")

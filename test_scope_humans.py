@@ -2,6 +2,8 @@ from dataclasses import replace
 import os
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 
 import numpy as np
@@ -76,6 +78,9 @@ class HumanTests(unittest.TestCase):
         poses[1] = replace(poses[1],timestamp_s=1.)
         fused,_ = fuse_views(poses)
         self.assertEqual(len(fused),2)
+        pipeline = HumanPipeline()
+        result = pipeline.step(HumanScene(width=128,scenario="overlapping_people").tick(0),0.)
+        self.assertFalse(result["pointing"])
 
     def test_temporal_id_hold_and_expiration(self):
         tracker = PersonTracker()
@@ -100,6 +105,7 @@ class HumanTests(unittest.TestCase):
         self.assertEqual(max(scores,key=scores.get),"chair_02")
         self.assertAlmostEqual(sum(scores.values()),1.)
         revision = pipeline.mapping.revision
+        self.assertEqual(revision,2)
         pipeline.runtime.configure("human_pose",ModuleConfig(enabled=False))
         pipeline.runtime.configure("map_visualization",ModuleConfig(enabled=False))
         disabled = pipeline.step(scene.tick(1),.1)
@@ -138,6 +144,55 @@ class HumanTests(unittest.TestCase):
             r = p.step(HumanScene(width=128,scenario=case).tick(0),0.)
             self.assertGreater(r["candidates"]["person_001"]["scores"]["unknown"],.9)
 
+    def test_nonblocking_pipeline_and_stale_entities(self):
+        gate = threading.Event()
+        entered = threading.Event()
+        class SlowPose:
+            name = "slow-test-model"
+            def detect(self,*args):
+                entered.set()
+                gate.wait(2)
+                return []
+        p = HumanPipeline(pose_detector=SlowPose(),realtime=True)
+        scene = HumanScene(width=96)
+        try:
+            p.step(scene.tick(0),0.)
+            self.assertTrue(entered.wait(1))
+            revision = p.mapping.revision
+            for i in range(1,4):
+                p.step(scene.tick(i),i/10)
+            self.assertGreater(p.mapping.revision,revision)
+            self.assertFalse(p.tracker.tracks)
+        finally:
+            gate.set()
+            p.close()
+        p = HumanPipeline()
+        r = p.step(scene.tick(0),0.)
+        hypothesis = replace(r["pointing"][0],timestamp_s=1.)
+        scores = score_targets(hypothesis,list(p.entities.entities.values()))
+        self.assertEqual(scores["scores"]["unknown"],1.)
+        self.assertEqual(len(scores["stale_entities_excluded"]),4)
+
+    def test_finger_cue_requires_quality_depth_and_has_broad_uncertainty(self):
+        from scope.humans import HumanJoint3D
+        _,tracks,_ = track_for()
+        track = tracks[0]
+        joints = dict(track.pose.joints)
+        wrist = joints["right_wrist"]
+        direction = np.array([1.,0.,0.])
+        for n,offset in (("mcp",.02),("pip",.05),("tip",.10)):
+            name = f"right_index_{n}"
+            joints[name] = HumanJoint3D(name,wrist.position+direction*offset,np.eye(3)*.0001,
+                1.,JointState.OBSERVED_3D,0.,("front",))
+        track.pose = replace(track.pose,joints=joints,hand_quality={"right":.9})
+        h = estimate_pointing(track,0.)
+        self.assertEqual(h.state,"DEGRADED")
+        self.assertTrue(np.allclose(h.direction,direction))
+        self.assertGreater(h.angular_uncertainty_rad,np.deg2rad(10))
+        joints["right_index_tip"] = replace(joints["right_index_tip"],position=None,covariance=None)
+        h = estimate_pointing(track,0.)
+        self.assertNotIn("index",h.reason)
+
 
 @unittest.skipUnless(os.environ.get("SCOPE_HUMAN_EPISODE"),"Set SCOPE_HUMAN_EPISODE to recorded RGB-D")
 class RecordedHumanTests(unittest.TestCase):
@@ -157,3 +212,17 @@ class RecordedHumanTests(unittest.TestCase):
             hypotheses.extend(r["pointing"])
         self.assertTrue(any(h.state!="ABSTAIN" for h in hypotheses))
         p.close()
+
+
+@unittest.skipUnless(os.environ.get("SCOPE_IPO_DATASET"),"Set SCOPE_IPO_DATASET to extracted IPO dataset root")
+class RecordedPointingTests(unittest.TestCase):
+    def test_estimated_finger_direction_against_labeled_targets(self):
+        from scope.ipo import benchmark_ipo
+        root = Path(os.environ["SCOPE_IPO_DATASET"])
+        with tempfile.TemporaryDirectory() as tmp:
+            result = benchmark_ipo(root/"00017",root/"00001",
+                Path(os.environ.get("SCOPE_HAND_MODEL","models/gesture_recognizer.task")),Path(tmp))
+        self.assertGreaterEqual(result["nonabstained"],5)
+        self.assertLess(result["angular_error_mean_deg"],15.)
+        self.assertGreaterEqual(result["top1_rate_all"],.5)
+        self.assertGreater(result["abstention_rate"],0.)

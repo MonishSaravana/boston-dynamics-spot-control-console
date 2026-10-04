@@ -48,7 +48,8 @@ def fuse_group(group):
             JointState.OBSERVED_3D,timestamp,cameras,"Fused aligned depth")
     return HumanPoseObservation(tuple(i for p in group for i in p.observation_ids),timestamp,
         joints,tuple(sorted(set(c for p in group for c in p.source_cameras))),
-        float(np.mean([p.confidence for p in group])))
+        float(np.mean([p.confidence for p in group])),
+        {side:max(p.hand_quality.get(side,0.) for p in group) for side in ("left","right")})
 
 
 def fuse_views(observations):
@@ -81,6 +82,8 @@ def fuse_views(observations):
             if (len(order)>1 and costs[i,order[1]]-costs[i,j]<.08 or
                     len(competitors)>1 and competitors[1]-competitors[0]<.08):
                 unresolved.append(p.observation_ids)
+                for candidate in np.flatnonzero(np.isfinite(costs[i])):
+                    unresolved.extend(item.observation_ids for item in groups[candidate])
                 continue
             if i==np.argmin(costs[:,j]):
                 assignments[i] = j
@@ -168,7 +171,7 @@ class PersonTracker:
                     else:
                         joints[name] = new
                 track.pose = HumanPoseObservation(p.observation_ids,p.timestamp_s,joints,
-                    p.source_cameras,p.confidence)
+                    p.source_cameras,p.confidence,p.hand_quality)
                 track.last_seen_s = timestamp_s
             track.state = "VISIBLE"
             track.history.append((timestamp_s,p.observation_ids))

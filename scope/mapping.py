@@ -56,22 +56,24 @@ class VoxelMap:
         self.warnings: list[str] = []
         self._intrinsics = None
         self._last_timestamp = None
+        self._streams = {}
 
     def _indices(self, xyz: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         ijk = np.floor((xyz - self.config.origin) / self.config.voxel_m).astype(np.int32)
         valid = ((ijk >= 0) & (ijk < self.config.shape)).all(axis=1)
         return ijk, valid
 
-    def integrate(self, frame: RgbdFrame) -> bool:
+    def integrate(self, frame: RgbdFrame, stream_id: str = "default") -> bool:
         try:
             frame.validate()
         except ValueError as exc:
             self.rejected.append(str(exc))
             return False
-        if self._intrinsics is not None and frame.intrinsics != self._intrinsics:
+        intrinsics,last_timestamp = self._streams.get(stream_id,(None,None))
+        if intrinsics is not None and frame.intrinsics != intrinsics:
             self.rejected.append(f"{frame.frame_id}: camera calibration changed within episode")
             return False
-        if self._last_timestamp is not None and frame.timestamp_s <= self._last_timestamp:
+        if last_timestamp is not None and frame.timestamp_s <= last_timestamp:
             self.rejected.append(f"{frame.frame_id}: timestamp is not increasing")
             return False
         points_cam, colors, depth = project_depth(
@@ -121,6 +123,7 @@ class VoxelMap:
         self.revision += 1
         self._intrinsics = frame.intrinsics
         self._last_timestamp = frame.timestamp_s
+        self._streams[stream_id] = (frame.intrinsics,frame.timestamp_s)
         return True
 
     def states(self) -> np.ndarray:
