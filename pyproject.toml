@@ -11,6 +11,7 @@ dependencies = ["numpy>=2", "Pillow>=11", "scipy>=1.15", "scikit-image>=0.25", "
 
 [project.optional-dependencies]
 detector = ["torch==2.14.1", "torchvision==0.29.1"]
+pose = ["torch==2.14.1", "torchvision==0.29.1"]
 
 [project.scripts]
 scope = "scope.cli:main"
