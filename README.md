@@ -1,6 +1,6 @@
 # Boston Dynamics Spot Control Console (SCOPE)
 
-**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The existing desktop app displays Spot's built-in fisheye cameras and requests power, stand, movement, and standing-posture commands through the Spot SDK. An independent offline mapping command now reconstructs a 3D scene from RGB-D frames with supplied camera poses. It does not connect to Spot.
+**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop app displays Spot's built-in fisheye cameras and requests power, stand, movement, and standing-posture commands through the Spot SDK. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Those perception commands do not connect to Spot's control path. Real Spot multi-camera human perception remains untested.
 
 The front panorama is an approximate stitch of two cameras. The robot mesh displays fresh measured joint positions when available; the posture controls show requested offsets. SCOPE is an independent project, not an official or endorsed Boston Dynamics product.
 
@@ -13,6 +13,7 @@ The front panorama is an approximate stitch of two cameras. The robot mesh displ
 - [Offline 3D mapping](#offline-3d-mapping)
 - [Semantic objects in the map](#semantic-objects-in-the-map)
 - [Persistent memory across visits](#persistent-memory-across-visits)
+- [Human geometry, pointing, and module health](#human-geometry-pointing-and-module-health)
 - [Future plans](#future-plans)
 - [Contact](#contact)
 - [Licensing and compatibility](#licensing-and-compatibility)
@@ -250,6 +251,52 @@ scope benchmark-memory --output runs/memory-benchmark
 An object becomes `POSSIBLY_MISSING` only after two adequate, distinct views see depth rays pass through its old region. A region outside the view, blocked by another surface, or supported by poor depth does not establish absence. Missing detections alone do not establish absence either. Real-model absence reliability defaults to zero because it has not been measured.
 
 Use `scope compare-episodes RUN_A RUN_B --shared-frame FRAME` to inspect identity candidates without adding to persistent memory. This flag asserts that both runs already share exact coordinates. For separately aligned maps, supply rigid-transform JSON with explicit translation/rotation uncertainty. Memory does not estimate map registration. Scores are heuristics; similar chairs can remain unresolved, and a new object of a previously seen class can also be left unresolved. The [Milestone 3 report](docs/milestone-3.md) gives separate import/build commands, alignment examples, all benchmark results, and failure limits. Run outputs, recordings, and databases stay outside Git.
+
+## Human geometry, pointing, and module health
+
+The Milestone 4 runtime lifts visible shoulders, elbows, wrists, and other body joints through aligned depth, fuses compatible virtual-camera observations, and maintains short-lived person IDs. Pointing uses sampled origins and directions with an explicit angular spread. Missing joints can widen the distribution or produce `ABSTAIN`; ambiguous people remain unresolved. Candidate scores are geometric hit fractions against current M2 entity bounds and M1 occupied voxels, not calibrated probabilities of human intent.
+
+Install the offline package and launch the combined room demo:
+
+```sh
+source .venv/bin/activate
+pip install -e .
+scope map synthetic --entities --humans --frames 24 --width 192 --toggle-demo --output runs/human-room
+```
+
+The Rerun recording shows the map, four entities, a 3D skeleton, front/left camera frustums, ray samples, candidate scores, module health, measured host update rates, and source-data ages. The person points toward chair B (`chair_02`). On the **frame** timeline, frames 8–17 disable the left camera, frames 12–17 also disable human inference, and frame 18 resumes both. Mapping and semantic entities continue; the completed primary-camera episode is then imported through M3 into the run's `memory.sqlite`. The synthetic RGB skeleton and visible keypoints are illustrative/oracle data, not a neural detector result.
+
+Stages and expensive outputs can run separately:
+
+```sh
+scope humans synthetic --camera front
+scope humans synthetic --camera front --camera left
+scope pointing synthetic --oracle-keypoints
+scope telemetry synthetic --disable camera/left --rate semantic_detection=5 --every mapping=2
+scope pointing synthetic --disable map_visualization
+scope pointing synthetic --no-recording --no-viewer
+```
+
+Use `--disable MODULE`, `--rate MODULE=HZ`, `--every MODULE=N`, or `--config CONFIG.json`; the same mutable runtime configuration is available to a future GUI. `--realtime` moves pose and semantic inference into bounded workers so a slow model can drop obsolete inputs while mapping continues. Replay defaults to synchronous processing for reproducible evaluation. Per-camera/depth/model settings use names such as `camera/front`, `depth/left`, `pose/front`, and `semantic/left`. The robot-model view is reserved and disabled in this offline viewer; the existing GUI still provides its own model view.
+
+Estimated pose is optional and uses CPU TorchVision Keypoint R-CNN. Add the hand extra and a local Gesture Recognizer bundle to use reliable index-finger geometry:
+
+```sh
+pip install -e '.[pose,hands]'
+scope pointing synthetic --estimated-keypoints --frames 3 --no-viewer
+scope pointing episode /path/to/saved-rgbd-episode --estimated-keypoints --hand-model models/gesture_recognizer.task
+scope benchmark-humans --frames 10 --output runs/human-benchmark
+```
+
+The model does not recognize the synthetic stick person reliably. Its real-source checks instead use public TUM RGB-D people and labeled Innsbruck pointing stills. The labeled subset produced a direction in 7 of 10 target cases, averaging 4.67° angular error on those seven; two cases abstained and one lacked depth. This small subset does not establish general pointing accuracy or real Spot support. CPU inference and the complete room demo are slow in this workspace. See [the Milestone 4 report](docs/milestone-4.md) for source preparation, exact benchmark commands, mean/median/p95 timings, calibration assumptions, failures, and acceptance evidence.
+
+A read-only sensor inventory is ready for the next robot session. Confirm the hostname with the instructor; credentials are prompted by the SDK:
+
+```sh
+scope spot-sensors --hostname 192.168.80.3 --samples 5 --output runs/monday-sensors.json
+```
+
+It reads image capabilities, timestamps, transforms, RPC durations, and in-memory decode durations. It does not acquire a lease or issue motion. Pixel-level RGB/depth alignment still needs a separate check on the robot; the report explicitly leaves it unverified.
 
 ## Future plans
 
