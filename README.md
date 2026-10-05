@@ -1,12 +1,13 @@
 # Boston Dynamics Spot Control Console (SCOPE)
 
-**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop and local browser consoles display Spot's built-in fisheye cameras and request power, stand, movement, and standing-posture commands through the Spot SDK. The browser console runs on the operator's laptop at `127.0.0.1`; it has an offline demo and a launcher that updates one managed installation from GitHub before starting. The browser control path has not been tested on a live robot. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Those perception commands do not connect to Spot's control path. Local object queries now accept ordinary phrases, refine supported regions into masks, and track them between detector refreshes. On six held-out public rooms, the default localized 16 of 25 annotated targets and accepted 6 of 119 annotation-level negatives. Real Spot multi-camera perception remains untested.
+**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop and local browser consoles display Spot's built-in fisheye cameras and request power, stand, movement, and standing-posture commands through the Spot SDK. The browser console runs on the operator's laptop at `127.0.0.1`; it has an offline demo and a launcher that updates one managed installation from GitHub before starting. The browser control path has not been tested on a live robot. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Local object queries accept ordinary phrases, refine supported regions into masks, and track them between detector refreshes. A new interaction console demonstrates query or pointing → target confirmation → destination preview → GO with a virtual robot; its default Spot mode uses read-only sensors and dry-run GO. No M5 path has been tested on a physical Spot. On six held-out public rooms, the default query localized 16 of 25 annotated targets and accepted 6 of 119 annotation-level negatives.
 
 The front panorama is an approximate stitch of two cameras. The robot mesh displays fresh measured joint positions when available; the posture controls show requested offsets. SCOPE is an independent project, not an official or endorsed Boston Dynamics product.
 
 ## Contents
 
 - [Install](#install)
+- [Target interaction preview](#target-interaction-preview)
 - [Local browser console](#local-browser-console)
 - [Run with the class E-stop](#run-with-the-class-e-stop)
 - [Controls and views](#controls-and-views)
@@ -62,6 +63,30 @@ Gesture mode needs two local MediaPipe bundles. Download them from Google's mode
 | [Pose Landmarker Lite](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker#models) | `pose_landmarker_lite.task` |
 
 The rest of the GUI runs without them; gesture mode cannot start if they are missing. The bundles are excluded from this repository while their redistribution terms are reviewed.
+
+## Target interaction preview
+
+The M5 console is on the `codex/m5-live-spot-interaction` development branch while physical validation is pending. Run the synthetic room and virtual GO loop without a robot:
+
+```sh
+.venv/bin/python -m scope.m5_console --demo
+```
+
+Type `chair`, select one of the two candidates, press **CONFIRM TARGET**, inspect the highlighted object and proposed route, then press **GO · virtual**. **Simulate pointing** and direct entity selection use the same confirmation path. Synthetic images and map geometry are test fixtures, not Spot captures.
+
+To inspect physical image sources without a lease or movement, run:
+
+```sh
+.venv/bin/python -m scope spot-sensors --hostname ROBOT_IP --samples 10
+```
+
+Then start the default dry-run console using a source name from that report:
+
+```sh
+.venv/bin/python -m scope.m5_console --spot ROBOT_IP --visual-source VISUAL_SOURCE
+```
+
+Camera acquisition and query overlays can run without depth. Mapping and destination generation require a measured aligned depth pair, calibration, source timestamps, and odom transforms. The console refuses RGB-D geometry until the operator has checked alignment on the robot and explicitly passes `--depth-source DEPTH_SOURCE --alignment-verified`. Default Spot GO records `WOULD_EXECUTE_NO_MOTION` and sends no command. A separate `--supervised-go` option is reserved for the final physical gate after the class E-stop, geometry, target, route, and dry-run checks. See [the M5 checklist](docs/milestone-5.md) for the ordered validation procedure and remaining limits.
 
 ## Local browser console
 
