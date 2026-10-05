@@ -101,6 +101,8 @@ class PerceptionTests(unittest.TestCase):
             self.assertEqual(s["tracks"][0]["state"],"FOUND")
             self.assertAlmostEqual(s["tracks"][0]["candidate"]["box_xyxy"][0],35,delta=1)
             self.assertEqual(len(s["entities"]),1)
+            self.assertEqual(s["tracks"][0]["candidate"]["evidence"]["tracked_depth"]["state"],"ESTIMATED_MASK_MEASURED_DEPTH")
+            self.assertEqual(s["tracks"][0]["candidate"]["evidence"]["tracked_depth"]["source_timestamp_s"],.2)
         finally:p.close()
 
     def test_worker_failure_retains_explicit_reason(self):
@@ -111,6 +113,17 @@ class PerceptionTests(unittest.TestCase):
             self.assertEqual(s["queries"][0]["state"],"FAILED")
             self.assertIn("detector unavailable",s["queries"][0]["reason"])
             self.assertEqual(s["telemetry"]["object_tracking"]["status"],"OK")
+        finally:p.close()
+
+    def test_qualified_phrase_and_synonym_share_depth_entity(self):
+        p=self.pipeline(lambda f,q:QueryResult(q,QueryState.FOUND,"found",[candidate()],f.timestamp_s,f.frame_id))
+        try:
+            p.request("gray sofa");p.tick(frame());time.sleep(.05);p.tick(frame(.1))
+            first=p.results["gray sofa"].candidates[0].entity_id
+            p.request("couch");p.tick(frame(.2));time.sleep(.05);p.tick(frame(.3))
+            self.assertEqual(len(p.core.entities.entities),1)
+            self.assertEqual(first,p.results["couch"].candidates[0].entity_id)
+            self.assertEqual(p.results["gray sofa"].query.raw_phrase,"gray sofa")
         finally:p.close()
 
     def test_background_memory_works_without_query_or_humans(self):
@@ -129,6 +142,21 @@ class PerceptionTests(unittest.TestCase):
             self.assertEqual(len(s["tracks"]),1)
             self.assertEqual(p.events[0]["kind"],"common_discovery")
             self.assertFalse(p.results)
+        finally:p.close()
+
+    def test_rgb_background_tracks_without_inventing_depth(self):
+        from scope.objects import ObjectObservation2D
+        class Background:
+            name="common-test"
+            def detect(self,f):return [ObjectObservation2D(f.frame_id+":box",f.frame_id,candidate().mask,{"box":1.},.8,self.name)]
+        p=PerceptionPipeline(MapConfig((-3.,-3.,0.),(60,60,40)),lambda:None,
+            background_detector=Background(),configs={"mapping":ModuleConfig(enabled=False),
+            "human_pose":ModuleConfig(enabled=False),"open_vocabulary":ModuleConfig(enabled=False)})
+        try:
+            f=frame();f=replace(f,depth_m=np.full_like(f.depth_m,np.nan))
+            p.tick(f);time.sleep(.05);s=p.tick(replace(f,timestamp_s=.1,frame_id="rgb-next"))
+            self.assertEqual(len(s["tracks"]),1)
+            self.assertFalse(s["entities"]);self.assertFalse(p.memory_evidence)
         finally:p.close()
 
 

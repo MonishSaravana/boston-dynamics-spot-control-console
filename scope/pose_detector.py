@@ -35,7 +35,7 @@ class TorchvisionPoseDetector:
         if hand_model:
             from .hand_pose import HandPoseAdapter
             self.hands = self.hand_runtime.run("hand_pose",0.,lambda:HandPoseAdapter(hand_model))
-        self.metadata = {"model": self.name, "weights": self.weights.name,
+        self.metadata = {"backend":"torchvision", "model": self.name, "weights": self.weights.name,
                          "torch": torch.__version__, "torchvision": torchvision.__version__,
                          "device": "cpu", "model_width": model_width,
                          "joint_quality": "heatmap score heuristic; not calibrated visibility"}

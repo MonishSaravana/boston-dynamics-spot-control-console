@@ -12,6 +12,7 @@ class SemanticQueryTests(unittest.TestCase):
         self.assertEqual(q.raw_phrase, "  Gray COUCH!  ")
         self.assertEqual(q.alternatives, ("gray couch", "gray sofa"))
         self.assertEqual(q.request_id, "q1")
+        self.assertEqual(q.entity_label,"sofa")
         self.assertEqual(SemanticQuery.from_command(TextCommand("robot charger")).alternatives, ("robot charger",))
         self.assertEqual(SemanticQuery.from_command(TextCommand("bagpipe")).alternatives, ("bagpipe",))
 

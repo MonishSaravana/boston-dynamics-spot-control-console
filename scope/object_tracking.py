@@ -48,6 +48,7 @@ class MaskTracker:
         for candidate in candidates:
             if candidate.mask is None:
                 continue
+            candidate.evidence.setdefault("detector_box_xyxy",list(candidate.box_xyxy))
             matches = sorted(((box_iou(candidate.box_xyxy,t.candidate.box_xyxy),t)
                 for t in self.tracks.values() if t.track_id not in used and t.state not in
                 (QueryState.TRACK_LOST,QueryState.STALE)), key=lambda x:x[0], reverse=True)
@@ -63,7 +64,7 @@ class MaskTracker:
                 self.counter += 1
                 identity,queries = f"target-{self.counter:03d}",{query.normalized}
             candidate.track_id = identity
-            if match:
+            if match and candidate.entity_id is None:
                 candidate.entity_id = match.candidate.entity_id
             track = ObjectTrack(identity,candidate,queries,frame.timestamp_s,frame.timestamp_s,
                 gray.copy(),histogram,self._points(gray,candidate.mask))

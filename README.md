@@ -1,6 +1,6 @@
 # Boston Dynamics Spot Control Console (SCOPE)
 
-**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop app displays Spot's built-in fisheye cameras and requests power, stand, movement, and standing-posture commands through the Spot SDK. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Those perception commands do not connect to Spot's control path. Real Spot multi-camera human perception remains untested.
+**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop app displays Spot's built-in fisheye cameras and requests power, stand, movement, and standing-posture commands through the Spot SDK. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Those perception commands do not connect to Spot's control path. Local object queries now accept ordinary phrases, refine supported regions into masks, and track them between detector refreshes. On six held-out public rooms, the default localized 16 of 25 annotated targets and accepted 6 of 119 annotation-level negatives. Real Spot multi-camera perception remains untested.
 
 The front panorama is an approximate stitch of two cameras. The robot mesh displays fresh measured joint positions when available; the posture controls show requested offsets. SCOPE is an independent project, not an official or endorsed Boston Dynamics product.
 
@@ -14,6 +14,7 @@ The front panorama is an approximate stitch of two cameras. The robot mesh displ
 - [Semantic objects in the map](#semantic-objects-in-the-map)
 - [Persistent memory across visits](#persistent-memory-across-visits)
 - [Human geometry, pointing, and module health](#human-geometry-pointing-and-module-health)
+- [Local object queries and reality benchmarks](#local-object-queries-and-reality-benchmarks)
 - [Future plans](#future-plans)
 - [Contact](#contact)
 - [Licensing and compatibility](#licensing-and-compatibility)
@@ -298,6 +299,42 @@ scope spot-sensors --hostname 192.168.80.3 --samples 5 --output runs/monday-sens
 
 It reads image capabilities, timestamps, transforms, RPC durations, and in-memory decode durations. It does not acquire a lease or issue motion. Pixel-level RGB/depth alignment still needs a separate check on the robot; the report explicitly leaves it unverified.
 
+## Local object queries and reality benchmarks
+
+M4.5 adds two independent modes: periodic common-object discovery with SSDLite, and on-demand text queries with Grounding DINO Tiny plus OWLv2 corroboration. Supported query boxes receive SAM 2.1 Tiny masks during discovery/refresh. Sparse optical flow propagates masks; disagreement, expired verification, lost tracks, and ambiguity remain visible. Scores are uncalibrated evidence. Text modifiers such as color or brand are not independently verified, and two models can agree on the wrong object.
+
+Install the optional local models and Qt query console, then select an input:
+
+```sh
+source .venv/bin/activate
+python -m pip install -e '.[perception,perception-gui]'
+scope hardware
+scope query-object "gray sofa" --image /path/to/room.jpg --output runs/sofa-query
+scope perceive --image /path/to/room.jpg --interactive --output runs/room-query-console
+scope perceive --webcam 0 --interactive --background --output runs/camera-queries
+```
+
+Model weights download on first use into the local model cache. Startup can take seconds and requires network access until cached; subsequent inference is local. The camera opens only when `--webcam` is supplied. Video files use `--video /path/to/phone-video.mp4`. RGB inputs support masks and 2D tracks; measured 3D requires aligned depth, calibrated intrinsics, and a declared camera/world pose. Use `--image ... --depth ... --calibration ...` with the JSON format in the [M4.5 report](docs/milestone-4.5.md), or replay `--episode`/`--tum` recordings with supplied poses. These commands have no robot control path.
+
+Enter a phrase and press **Find object**. The console shows the raw phrase, expanded query, proposed region, mask, observed center in meters when supported, track state, evidence scores, backend/device, latency, and output age. Scroll the telemetry table for mean/median/p95, queues, drops, and model details. The Queries, Common objects, Human pose, Mapping, Memory, and Rerun checkboxes change modules independently. Retained tracks can outlive the query detector briefly; verification expires after 3 seconds on moving sources. A still image represents one immutable observation, with unknown original acquisition time.
+
+Common objects and human pose are opt-in (`--background`, `--humans`). Defaults cap common detection at 0.5 Hz, pose at 3 Hz, mapping at 5 Hz, Rerun at 5 Hz (1 Hz in the interactive console), and query refresh at one per 1.5 seconds. Actual rates are measured and may be lower. On this M4 host, a warmed 180-frame public replay maintained about 30 input updates/s with a 15.0 ms mean core tick; query results averaged about 1 second during concurrent inference. This is a core responsiveness measurement, not a 30 Hz detector claim. Rerun recording runs in a bounded worker; native viewer rendering cost is outside those measurements.
+
+```sh
+scope perceive --video /path/to/room.mp4 --query "power strip" --background --duration 30 --no-rerun
+scope perceive --episode /path/to/rgbd-episode --interactive --disable human_pose --rate rerun=1
+scope capture-reality --video /path/to/phone-video.mp4 --frames 100 --output runs/room-capture
+scope capture-reality --webcam 0 --frames 100 --hz 10 --output runs/webcam-capture
+```
+
+Capture/import writes RGB frames and `reality.json` outside Git. Add explicit per-frame presence/absence, boxes or mask files, room IDs, and development/heldout splits before evaluation. A room cannot appear in both splits. An empty annotation list is rejected rather than scored as negatives:
+
+```sh
+scope benchmark-reality --manifest runs/room-capture/reality.json --split heldout --output runs/room-evaluation
+```
+
+The [M4.5 report](docs/milestone-4.5.md) records room selection, public dataset preparation, closed/open vocabulary comparisons, failures, tracking persistence, acceleration, exact reproducible probes, and limits for Spot testing. Run outputs and model bundles stay outside Git. This milestone adds no spatial-language parser, LLM planner, navigation, or audio.
+
 ## Future plans
 
 These are ideas for future work, not features in the current app.
@@ -317,6 +354,7 @@ For ideas or questions, email [monishsaravana@college.harvard.edu](mailto:monish
 
 - The Spot SDK checkout and virtual environment are excluded. Boston Dynamics' [SDK license](https://github.com/boston-dynamics/spot-sdk/blob/master/LICENSE) requires its full license and retained notices if SDK files are redistributed, and restricts trademark use that implies endorsement.
 - The local MediaPipe model bundles are excluded until their redistribution terms are confirmed.
+- The local Grounding DINO Tiny, OWLv2 Base, and SAM 2.1 Tiny model cards list Apache-2.0 licenses; bundles remain excluded. See the model revisions and upstream links in the M4.5 report.
 - SCOPE's original files use the [MIT License](LICENSE); it does not cover the SDK or third-party model bundles.
 
 **Compatibility:** macOS Apple Silicon offline UI checked with Python 3.14.2; Windows and Linux not tested. Live robot operation has not been validated for this publication.

@@ -123,6 +123,18 @@ class EntityFusionTests(unittest.TestCase):
         self.assertNotEqual(store.observation_entity[first.observation_id],
                             store.observation_entity[altered.observation_id])
 
+    def test_bounded_history_preserves_full_fusion_statistics(self):
+        bounded,full=EntityStore(history_limit=3,entity_limit=8),EntityStore()
+        for observations in self.projected:
+            bounded.add_frame(observations);full.add_frame(observations)
+        self.assertLessEqual(len(bounded.observations),3)
+        self.assertLessEqual(len(bounded.decisions),3)
+        for identity,e in bounded.entities.items():
+            self.assertLessEqual(len(e.observation_ids),3)
+            self.assertEqual(e.observation_count,full.entities[identity].observation_count)
+            np.testing.assert_allclose(e.center,full.entities[identity].center)
+            np.testing.assert_allclose(e.covariance,full.entities[identity].covariance)
+
 
 if __name__ == "__main__":
     unittest.main()

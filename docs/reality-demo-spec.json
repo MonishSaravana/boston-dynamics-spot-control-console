@@ -1,0 +1,17 @@
+{
+  "dataset": "NYU Depth V2",
+  "selection": "First labeled living-room scene excluding all previously evaluated rooms; selected before image or query inspection",
+  "index": 150,
+  "scene": "living_room_0005",
+  "queries": [
+    "gray sofa",
+    "backpack",
+    "power strip",
+    "couch",
+    "red toolbox",
+    "pillow",
+    "lamp"
+  ],
+  "thresholds": "Unchanged default 0.45 DINO, 0.15 OWLv2, 0.3 overlap",
+  "tuning": false
+}

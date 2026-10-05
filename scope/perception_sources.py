@@ -90,6 +90,8 @@ def capture_reality(output,source,frames=100,hz=10,width=640):
     manifest = {"format_version":1,"source":"webcam" if isinstance(source,int) else "video import",
                 "acquisition_timestamp_s":None,"depth":None,"intrinsics":None,"poses":None,
                 "frames":rows,"evaluation_cases":[],
+                "annotation_example":{"frame":0,"room_id":"room-C","split":"heldout","query":"power strip",
+                    "present":True,"boxes_xyxy":[10,20,150,90],"masks":[]},
                 "notes":"RGB only. Add per-frame query/box or mask annotations and room IDs for evaluation. No 3D or measured camera acquisition claim."}
     (output/"reality.json").write_text(json.dumps(manifest,indent=2)+"\n")
     return manifest

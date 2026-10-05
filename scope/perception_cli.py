@@ -19,7 +19,9 @@ def register_perception_commands(commands):
     p=commands.add_parser("prepare-reality",help="Freeze room-disjoint NYU scene IDs and query vocabulary")
     p.add_argument("--nyu-mat",type=Path,required=True);p.add_argument("--output",type=Path,required=True)
     p=commands.add_parser("benchmark-reality",help="Real held-out room detector/mask/depth comparison")
-    p.add_argument("--nyu-mat",type=Path,required=True);p.add_argument("--spec",type=Path,required=True)
+    benchmark_source=p.add_mutually_exclusive_group(required=True)
+    benchmark_source.add_argument("--nyu-mat",type=Path);benchmark_source.add_argument("--manifest",type=Path)
+    p.add_argument("--spec",type=Path)
     p.add_argument("--output",type=Path,required=True);p.add_argument("--split",choices=("development","heldout"),default="heldout")
     p.add_argument("--backend",action="append",choices=("closed","grounding-dino","owlv2"))
     p.add_argument("--device",choices=("auto","cpu","mps","cuda"),default="auto")
@@ -65,14 +67,15 @@ def register_perception_commands(commands):
 
 
 class InputDriver:
-    def __init__(self,frame,reader=None,close=None):
+    def __init__(self,frame,reader=None,close=None,initial_decode_ms=None):
         self.current,self.reader,self.close_source = frame,reader,close
+        self.initial_decode_ms=initial_decode_ms
         self.last_receive = time.monotonic()
         self.worker = LatestWorker(lambda _:reader()) if reader else None
         self.pending,self.finished = False,False
         self.decode_ms = []
 
-    def poll(self):
+    def poll(self,runtime=None):
         if self.worker:
             result = self.worker.poll()
             if result:
@@ -80,7 +83,10 @@ class InputDriver:
                 self.pending = False;self.decode_ms.append(duration)
                 if error:raise RuntimeError(error)
                 if value is None:self.finished = True
-                else:self.current,self.last_receive = value,time.monotonic()
+                else:
+                    self.current,self.last_receive = value,time.monotonic()
+                    if runtime:
+                        runtime.observe("decode",value.timestamp_s,duration,metadata={"backend":"recording/camera reader","device":"cpu"})
             if not self.pending and not self.finished:
                 self.worker.submit(True);self.pending = True
         return self.current
@@ -129,7 +135,7 @@ def load_source(args):
         meta = {"source":"webcam" if args.webcam is not None else str(args.video),"depth":None,"intrinsics":None,
                 "acquisition_timestamp_s":None,"world_frame":"RGB-only","clock":"host receive" if args.webcam is not None else "video presentation seconds"}
     meta["initial_decode_ms"] = (time.perf_counter()-start)*1000
-    return InputDriver(frame,reader,close),meta
+    return InputDriver(frame,reader,close,meta["initial_decode_ms"]),meta
 
 
 def make_pipeline(args,driver,output):
@@ -144,6 +150,7 @@ def make_pipeline(args,driver,output):
     configs = {"mapping":ModuleConfig(enabled=bool(np.isfinite(frame.depth_m).any()),max_hz=5),
                "human_pose":ModuleConfig(enabled=args.humans,max_hz=3,stale_after_s=2),
                "object_detector":ModuleConfig(enabled=args.background,max_hz=.5,stale_after_s=3),
+               "viewer":ModuleConfig(enabled=not args.no_rerun,max_hz=1 if args.interactive else 5,stale_after_s=3),
                "segmentation":ModuleConfig(enabled=args.segmentation!="none",stale_after_s=3)}
     class LazyPose:
         name="torchvision-keypointrcnn-resnet50-fpn-coco-v1"
@@ -163,6 +170,10 @@ def make_pipeline(args,driver,output):
         recorder=None if args.no_rerun else PerceptionRecorder(output),configs=configs)
     p.runtime.state("pose/front").metadata=dict(pose.metadata)
     p.runtime.state("human_pose").metadata=dict(pose.metadata)
+    p.runtime.configure("decode",ModuleConfig(stale_after_s=2))
+    if driver.initial_decode_ms is not None:
+        p.runtime.observe("decode",frame.timestamp_s,driver.initial_decode_ms,
+            metadata={"backend":"initial source open/decode","device":"cpu"})
     aliases={"memory":"query_memory","rerun":"viewer","human_pose":"human_pose","semantics":"object_detector"}
     for name in args.disable:
         name=aliases.get(name,name)
@@ -187,7 +198,8 @@ def overlay(frame,snapshot):
     draw=ImageDraw.Draw(rgba)
     candidates=[]
     for q in snapshot.get("queries",[]):
-        candidates.extend((c,q["state"]) for c in q["candidates"] if not c["track_id"])
+        if q["normalized_query"]==snapshot.get("active_query"):
+            candidates.extend((c,q["state"]) for c in q["candidates"][:3] if not c["track_id"])
     candidates.extend((t["candidate"],t["state"]) for t in snapshot.get("tracks",[]))
     for c,state in candidates:
         x0,y0,x1,y1=c["box_xyxy"]
@@ -226,7 +238,7 @@ def run_perception_command(args):
             result=prepare_spec(args.nyu_mat,args.output)
         else:
             result=benchmark(args.nyu_mat,args.spec,args.output,args.split,
-                tuple(args.backend or ("closed","grounding-dino","owlv2")),args.device)
+                tuple(args.backend or ("closed","grounding-dino","owlv2")),args.device,args.manifest)
         print(json.dumps(result,indent=2));return 0
     if args.command=="hardware":
         print(json.dumps(hardware_report(),indent=2));return 0
@@ -250,7 +262,7 @@ def run_perception_command(args):
             if pending:p.request(pending.pop(0))
             start=time.monotonic()
             while time.monotonic()-start<(args.timeout if args.command=="query-object" else args.duration):
-                frame=driver.poll()
+                frame=driver.poll(p.runtime)
                 stamp=time.perf_counter();s=p.tick(frame,driver.now());ticks.append((time.perf_counter()-stamp)*1000)
                 result=p.results.get(p.pending_query[1].normalized) if p.pending_query else None
                 if result and result.state not in ("PENDING",):

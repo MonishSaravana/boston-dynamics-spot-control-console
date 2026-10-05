@@ -34,6 +34,13 @@ class SemanticQuery:
     alternatives: tuple[str, ...]
     request_id: str | None = None
 
+    @property
+    def entity_label(self):
+        for group in ALIASES:
+            if any(self.normalized==word or self.normalized.endswith(" "+word) for word in group):
+                return group[0]
+        return self.normalized
+
     @classmethod
     def from_command(cls, command: TextCommand):
         raw = command.text
@@ -82,11 +89,14 @@ class QueryResult:
     timings_ms: dict = field(default_factory=dict)
 
     def summary(self, now_s=None):
+        import time
+        consumed=self.metadata.get("result_consumed_monotonic_s")
         return {"user_phrase": self.query.raw_phrase, "normalized_query": self.query.normalized,
                 "expanded_queries": self.query.alternatives, "request_id": self.query.request_id,
                 "state": str(self.state), "reason": self.reason,
                 "source_timestamp_s": self.timestamp_s, "frame_id": self.frame_id,
                 "age_s": None if now_s is None else max(0., now_s-self.timestamp_s),
+                "result_age_s":None if consumed is None else max(0.,time.monotonic()-consumed),
                 "candidates": [c.summary() for c in self.candidates], "model": self.metadata,
                 "timings_ms": self.timings_ms,
                 "score_meaning": "Uncalibrated detector evidence, not probability of correctness"}

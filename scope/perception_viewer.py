@@ -42,10 +42,11 @@ class PerceptionRecorder:
             rr.log("world/map",rr.Points3D(positions,colors=colors,radii=.01))
         else:
             rr.log("world/map",rr.Clear(recursive=True))
+        rr.log("world/entities",rr.Clear(recursive=True))
         for e in s["entities"]:
             low,high = np.asarray(e["bounds_low_m"]),np.asarray(e["bounds_high_m"])
             rr.log("world/entities/"+e["entity_id"],rr.Boxes3D(centers=[(low+high)/2],sizes=[high-low],
-                labels=[e["entity_id"]],colors=[235,183,83]))
+                labels=[f'{e["entity_id"]} · observed {max(0.,s["timestamp_s"]-e["last_seen_s"]):.1f}s ago'],colors=[235,183,83]))
         human = s.get("human_snapshot",{})
         from .humans import BONES
         rr.log("world/humans",rr.Clear(recursive=True))
@@ -60,15 +61,19 @@ class PerceptionRecorder:
                 f'Expanded: {", ".join(q["expanded_queries"])}',q["reason"],
                 f'Snapshot age: {q["age_s"]:.2f}s; detector scores are uncalibrated'])
             query_lines.extend(f'{c["detector_match"]}: {c["score"]:.3f}; mask {c["mask_available"]}; entity {c["entity_id"]}' for c in q["candidates"])
+            for c in q["candidates"]:
+                if c["projection"]:query_lines.append(f'Observed center (m): {c["projection"]["center_m"]}')
+                if c["evidence"].get("verification"):query_lines.append(f'Verification: {c["evidence"]["verification"]}')
         rr.log("query",rr.TextDocument("\n\n".join(query_lines),media_type="text/markdown"))
-        lines = ["Module | State | Hz | Age s | Last ms | p95 ms", "---|---|---:|---:|---:|---:"]
+        lines = ["Module | State | Hz | Age s | Last ms | Mean ms | Median ms | p95 ms | Queue | Drops", "---|---|---:|---:|---:|---:|---:|---:|---:|---:"]
         def number(v):return "—" if v is None else f"{v:.2f}"
         for name,t in s["telemetry"].items():
             if t["successes"] or t["status"] in ("DISABLED","FAILED"):
-                lines.append(f'{name} | {t["status"]} | {number(t["host_update_hz"])} | {number(t["data_age_s"])} | {number(t["current_latency_ms"])} | {number(t["latency"]["p95_ms"])}')
-                if t["model"]:lines.append(f' | {t["device"]}: {t["model"]} | | | |')
+                lines.append(f'{name} | {t["status"]} | {number(t["host_update_hz"])} | {number(t["data_age_s"])} | {number(t["current_latency_ms"])} | {number(t["latency"]["mean_ms"])} | {number(t["latency"]["median_ms"])} | {number(t["latency"]["p95_ms"])} | {t["queue_depth"]} | {t["dropped_inputs"]}')
+                if t["model"]:lines.append(f' | {t["backend"]} / {t["device"]}: {t["model"]} | | | | | | | |')
         rss=s["resources"].get("rss_bytes")
         lines.extend(["",f'Core tick: {s["core_tick_ms"]:.2f} ms; cameras: {s["active_camera_count"]}',
+            f'Latest input age: {number(s["observation_age_s"])} s; Rerun enabled: {s["rerun_enabled"]}',
             f'RSS: {number(rss/1e6 if rss is not None else None)} MB; CPU: {number(s["resources"].get("cpu_percent"))}%',
             "Accelerator utilization unavailable; memory records verified query events."])
         rr.log("telemetry",rr.TextDocument("\n".join(lines),media_type="text/markdown"))

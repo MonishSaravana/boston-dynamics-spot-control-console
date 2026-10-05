@@ -65,10 +65,11 @@ def ground_truth(source,index,labels):
     return masks
 
 
-def score_case(frame,result,masks):
-    gt_boxes=[]
+def score_case(frame,result,masks,boxes=None):
+    gt_boxes=list(boxes or [])
     for mask in masks:
-        yy,xx=np.nonzero(mask);gt_boxes.append((xx.min(),yy.min(),xx.max()+1,yy.max()+1))
+        yy,xx=np.nonzero(mask)
+        if len(xx):gt_boxes.append((xx.min(),yy.min(),xx.max()+1,yy.max()+1))
     supported=result.state in ("FOUND","AMBIGUOUS")
     best_box=max((box_iou(c.box_xyxy,g) for c in result.candidates for g in gt_boxes),default=0.)
     mask_iou=max((float((c.mask&m).sum()/max(1,(c.mask|m).sum())) for c in result.candidates if c.mask is not None for m in masks),default=None)
@@ -78,8 +79,8 @@ def score_case(frame,result,masks):
         detection=ObjectObservation2D(f'{frame.frame_id}:benchmark-{i}',frame.frame_id,c.mask,
             {result.query.normalized:1.},c.score,c.model)
         if project_object(frame,detection) is not None:projected+=1
-    return {"present":bool(masks),"gt_instances":len(masks),"state":str(result.state),
-        "success":bool(masks and supported and best_box>=.5),"false_positive":bool(not masks and supported),
+    return {"present":bool(gt_boxes),"gt_instances":len(masks) if masks else len(gt_boxes),"state":str(result.state),
+        "success":bool(gt_boxes and supported and best_box>=.5),"false_positive":bool(not gt_boxes and supported),
         "best_box_iou":best_box,"best_mask_iou":mask_iou,"projected_candidates":projected,
         "candidate_false_positives":sum(max((box_iou(c.box_xyxy,g) for g in gt_boxes),default=0.)<.5 for c in result.candidates) if supported else 0}
 
@@ -96,15 +97,31 @@ def aggregate(rows):
         "latency_ms":distribution([r["total_ms"] for r in rows])}
 
 
-def benchmark(dataset,spec_path,output,split="heldout",backends=("closed","grounding-dino","owlv2"),device="auto"):
+def benchmark(dataset,spec_path,output,split="heldout",backends=("closed","grounding-dino","owlv2"),device="auto",manifest=None):
     from .detector import TorchvisionMaskDetector
     from .open_vocab import OpenVocabularyDetector,corroborate
     from .query_segmentation import Sam2Segmenter,GrabCutSegmenter
     output=Path(output)
     if output.exists() and any(output.iterdir()):raise ValueError("Use an empty benchmark output")
     output.mkdir(parents=True,exist_ok=True)
-    spec=json.loads(Path(spec_path).read_text())
-    source=NyuDataset(dataset)
+    if manifest:
+        from .reality_recording import RealityRecording
+        source=RealityRecording(manifest)
+        spec={"rooms":[],"queries":{},"non_coco":sorted(NON_COCO),
+              "model_spec":{"grounding-dino":{"threshold":.4,"size":512},"owlv2":{"threshold":.4,"size":512}}}
+        for case in source.cases:
+            room=next((r for r in spec["rooms"] if r["index"]==case["frame"]),None)
+            if room is None:
+                room={"index":case["frame"],"scene":case["room_id"],"split":case["split"],"type":"user recording","queries":[]}
+                spec["rooms"].append(room)
+            if room["scene"]!=case["room_id"] or room["split"]!=case["split"]:
+                raise ValueError("All annotations for one frame need the same room and split")
+            room["queries"].append(case["query"])
+        spec_path=manifest
+    else:
+        if not spec_path:raise ValueError("NYU evaluation requires --spec with a frozen split")
+        spec=json.loads(Path(spec_path).read_text())
+        source=NyuDataset(dataset)
     rooms=[r for r in spec["rooms"] if r["split"]==split]
     if not rooms:raise ValueError("No rooms in this split")
     rows=[];models={}
@@ -126,7 +143,8 @@ def benchmark(dataset,spec_path,output,split="heldout",backends=("closed","groun
             closed=None
             if backend=="closed":
                 start=time.perf_counter();closed=model.detect(frame);closed_ms=(time.perf_counter()-start)*1000
-            for phrase,gt_labels in spec["queries"].items():
+            phrases=((q,None) for q in room["queries"]) if manifest else spec["queries"].items()
+            for phrase,gt_labels in phrases:
                 query=SemanticQuery.from_command(TextCommand(phrase))
                 start=time.perf_counter()
                 if backend=="closed":
@@ -138,7 +156,7 @@ def benchmark(dataset,spec_path,output,split="heldout",backends=("closed","groun
                 else:
                     result=model.query(frame,query);total=(time.perf_counter()-start)*1000
                 # Ground truth is read after detector output and never passed to a model.
-                masks=ground_truth(source,room["index"],gt_labels)
+                masks,boxes=source.truth(room["index"],phrase,frame.rgb.shape[:2]) if manifest else (ground_truth(source,room["index"],gt_labels),None)
                 variants=[(backend,result,total)]
                 if segmenter and result.state in ("FOUND","AMBIGUOUS"):
                     checked=copy.deepcopy(result)
@@ -167,7 +185,7 @@ def benchmark(dataset,spec_path,output,split="heldout",backends=("closed","groun
                                      (backend+"+verified+sam2",result,total)])
                 for variant,value,cost in variants:
                     rows.append({"backend":variant,"room":room,"query":phrase,"non_coco":phrase in spec["non_coco"],
-                        "metrics":score_case(frame,value,masks),"result":value.summary(),"total_ms":cost})
+                        "metrics":score_case(frame,value,masks,boxes),"result":value.summary(),"total_ms":cost})
             print(backend,room["scene"],"complete",flush=True)
             (output/"cases.json").write_text(json.dumps(rows,indent=2,allow_nan=False)+"\n")
         del model,segmenter,verifier

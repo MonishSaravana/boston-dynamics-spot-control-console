@@ -32,6 +32,7 @@ class WorldEntity:
     last_seen_s: float
     supporting_views: set[str]
     depth_valid_fraction: float
+    observation_count: int = 1
 
     @property
     def class_probabilities(self) -> dict[str, float]:
@@ -64,6 +65,7 @@ class WorldEntity:
             "last_seen_s": self.last_seen_s,
             "supporting_views": len(self.supporting_views),
             "depth_valid_fraction": self.depth_valid_fraction,
+            "observation_count": self.observation_count,
         }
 
 
@@ -123,7 +125,10 @@ def match_evidence(obs: ObjectObservation3D, entity: WorldEntity, *, point_tree=
 class EntityStore:
     """Assign one observation per entity per frame; retain matching evidence."""
 
-    def __init__(self):
+    def __init__(self, history_limit=None, entity_limit=None):
+        if any(v is not None and v<1 for v in (history_limit,entity_limit)):
+            raise ValueError("Positive retention limits required")
+        self.history_limit,self.entity_limit=history_limit,entity_limit
         self.entities: dict[str, WorldEntity] = {}
         self.decisions: list[dict] = []
         self.observations: dict[str, ObjectObservation3D] = {}
@@ -149,7 +154,7 @@ class EntityStore:
         for name, probability in obs.detection.class_probabilities.items():
             entity.class_evidence[name] = entity.class_evidence.get(name, 0.) + weight * probability
         old_center = entity.center.copy()
-        n = len(entity.observation_ids)
+        n = entity.observation_count
         entity.low = np.minimum(entity.low, obs.low)
         entity.high = np.maximum(entity.high, obs.high)
         entity.center = ((entity.low + entity.high) / 2.0).astype(np.float32)
@@ -161,6 +166,8 @@ class EntityStore:
             chosen = np.linspace(0, len(entity.points_world) - 1, 12000, dtype=int)
             entity.points_world = entity.points_world[chosen]
         entity.observation_ids.append(obs.observation_id)
+        entity.observation_count += 1
+        entity.first_seen_s = min(entity.first_seen_s, obs.timestamp_s)
         entity.last_seen_s = max(entity.last_seen_s, obs.timestamp_s)
         entity.supporting_views.add(obs.detection.frame_id)
         entity.depth_valid_fraction = (entity.depth_valid_fraction * n +
@@ -206,6 +213,18 @@ class EntityStore:
             self.decisions.append({"selected": selected,
                                    "candidates": [item.summary() for item in candidates[i]]})
             updated.append(entity)
+        if self.history_limit:
+            while len(self.observations)>self.history_limit:
+                identity=next(iter(self.observations))
+                del self.observations[identity]
+                self.observation_entity.pop(identity,None)
+            self.decisions=self.decisions[-self.history_limit:]
+            for entity in self.entities.values():
+                entity.observation_ids=[identity for identity in entity.observation_ids if identity in self.observations]
+                entity.supporting_views.intersection_update(o.detection.frame_id for o in self.observations.values())
+        if self.entity_limit and len(self.entities)>self.entity_limit:
+            for entity in sorted(self.entities.values(),key=lambda e:e.last_seen_s)[:len(self.entities)-self.entity_limit]:
+                del self.entities[entity.entity_id]
         return updated
 
     def summaries(self) -> list[dict]:

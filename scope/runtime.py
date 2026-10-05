@@ -104,7 +104,8 @@ class Runtime:
         if metadata is not None:
             state.metadata = dict(metadata)
         state.success_times_s.append(timestamp_s)
-        state.success_host_times_s.append(time.monotonic())
+        state.host_complete_monotonic_s=time.monotonic()
+        state.success_host_times_s.append(state.host_complete_monotonic_s)
         state.successes += 1
         self.mark(name, Health.OK, "Measured worker output")
 

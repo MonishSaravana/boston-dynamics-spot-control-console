@@ -88,9 +88,12 @@ class HumanPipeline:
             worker = LatestWorker(function)
             self.workers[name] = worker
         state = rt.state(name)
+        model=self.pose_detector if name.startswith("pose/") else self.semantic_detector
+        if hasattr(model,"metadata"):state.metadata=dict(model.metadata)
         if rt.due(name,timestamp):
             worker.submit(payload)
         state.queue_depth,state.dropped_inputs = worker.queue_depth,max(state.dropped_inputs,worker.dropped)
+        state.in_flight = worker.in_flight
         completed = worker.poll()
         if completed is None:
             return None
@@ -185,6 +188,12 @@ class HumanPipeline:
                         state.success_times_s.append(source_s)
                         state.success_host_times_s.append(time.monotonic())
                         state.successes += 1
+                        completed_states=[rt.state(f"{prefix}/{s.camera_id}") for s in active
+                            if rt.state(f"{prefix}/{s.camera_id}").last_success_s in completed_times[aggregate]]
+                        state.durations_ms.append(sum(t.durations_ms[-1] for t in completed_states if t.durations_ms))
+                        if completed_states:
+                            state.metadata={**getattr(completed_states[0],"metadata",{}),
+                                "timing":"Sum of returned camera worker wall durations"}
                     rt.mark(aggregate,Health.DEGRADED if bad_camera or any(v!="OK" for v in statuses)
                             else Health.OK,"Some streams unavailable" if bad_camera else "Camera inference health")
                 else:

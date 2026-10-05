@@ -13,7 +13,7 @@ dependencies = ["numpy>=2", "Pillow>=11", "scipy>=1.15", "scikit-image>=0.25", "
 detector = ["torch==2.14.1", "torchvision==0.29.1"]
 pose = ["torch==2.14.1", "torchvision==0.29.1"]
 hands = ["mediapipe>=0.10.35,<0.11"]
-perception = ["torch==2.14.1", "torchvision==0.29.1", "transformers>=4.57,<5", "safetensors>=0.6", "opencv-python>=4.12", "psutil>=7", "h5py>=3.15"]
+perception = ["torch==2.14.1", "torchvision==0.29.1", "transformers>=4.57,<5", "safetensors>=0.6", "opencv-contrib-python>=4.12", "psutil>=7", "h5py>=3.15"]
 perception-gui = ["PySide6>=6.8,<7"]
 
 [project.scripts]

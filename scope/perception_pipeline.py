@@ -23,6 +23,8 @@ class PerceptionPipeline:
                "semantic_detection": ModuleConfig(enabled=False), "memory": ModuleConfig(enabled=False)}
         cfg.update(configs or {})
         self.core = HumanPipeline(("front",),cfg,pose_detector,realtime=True,map_config=map_config)
+        from .entities import EntityStore
+        self.core.entities=EntityStore(history_limit=512,entity_limit=128)
         self.runtime = self.core.runtime
         for name,config in {
             "open_vocabulary":ModuleConfig(stale_after_s=3),
@@ -98,7 +100,7 @@ class PerceptionPipeline:
             state.recent_failures.append({"timestamp_s":now_s,"reason":error})
             self.runtime.mark(name,Health.FAILED,error)
             return payload,None
-        stamp = payload.timestamp_s if hasattr(payload,"timestamp_s") else payload[2].timestamp_s if name=="open_vocabulary" else now_s
+        stamp = now_s if name=="resource_metrics" else payload.timestamp_s if hasattr(payload,"timestamp_s") else payload[2].timestamp_s if name=="open_vocabulary" else now_s
         model = self.query_detector if name=="open_vocabulary" else self.background_detector if name=="object_detector" else None
         metadata = getattr(model,"metadata",{}) if model is not None else {"backend":"rerun" if name=="viewer" else "host resources","device":"cpu"}
         self.runtime.observe(name,stamp,duration,output=value,
@@ -117,11 +119,7 @@ class PerceptionPipeline:
                 continue
             # Scores are evidence, not class probabilities. The identified label
             # is separate from its measured detector confidence.
-            label = query.normalized
-            for alternative in query.alternatives:
-                if alternative.endswith("sofa") or alternative.endswith("monitor") or alternative.endswith("backpack"):
-                    label = alternative
-                    break
+            label = query.entity_label
             observation = ObjectObservation2D(f"{frame.frame_id}:query-{self.verification}-{i}",frame.frame_id,
                 candidate.mask.copy(),{label:1.},candidate.score,candidate.model)
             projection = self.runtime.run("object_3d_projection",frame.timestamp_s,
@@ -169,6 +167,9 @@ class PerceptionPipeline:
         if not immutable and now_s-frame.timestamp_s > self.runtime.state("open_vocabulary").config.stale_after_s:
             result.state,result.reason = QueryState.STALE,"Query completed after its observation age limit"
         self.results[query.normalized] = result
+        result.metadata["result_consumed_monotonic_s"]=time.monotonic()
+        while len(self.results)>32:
+            del self.results[next(iter(self.results))]
         for name,duration in result.timings_ms.items():
             self.runtime.observe("query_"+name,frame.timestamp_s,duration,metadata=result.metadata)
         if "segmentation_error" in result.metadata:
@@ -193,6 +194,7 @@ class PerceptionPipeline:
             self.core_snapshot = self.core.step([HumanCameraSample("front",frame,[],[])],now_s)
             self.last_core_frame = (frame.frame_id,frame.timestamp_s)
             self.runtime.run("object_tracking",now_s,lambda:self.tracker.update(frame))
+            self.runtime.run("tracked_depth",now_s,lambda:self._tracked_depth(frame))
         completed = self._poll("open_vocabulary",now_s)
         if completed:
             self._accept_query(*completed,now_s)
@@ -214,25 +216,32 @@ class PerceptionPipeline:
             found = self._poll("object_detector",now_s)
             if found and found[1] is not None:
                 used,objects = found
+                from dataclasses import replace
+                original_labels={o.observation_id:o.label for o in objects}
+                objects=[replace(o,class_probabilities={
+                    SemanticQuery.from_command(TextCommand(o.label)).entity_label:1.}) for o in objects]
                 if now_s-used.timestamp_s <= self.runtime.state("object_detector").config.stale_after_s:
                     projections = self.runtime.run("background_projection",now_s,
                         lambda:[p for o in objects if (p:=project_object(used,o)) is not None],input_s=used.timestamp_s)
+                    from .semantic_query import ObjectCandidate
+                    candidates=[ObjectCandidate(tuple(o.box_xyxy),o.confidence,o.label,o.source,o.mask.copy()) for o in objects]
+                    for o,c in zip(objects,candidates):c.evidence["closed_category"]=original_labels[o.observation_id]
                     if projections:
                         self.runtime.run("world_entities",now_s,lambda:self.core.entities.add_frame(projections),input_s=used.timestamp_s)
-                        from .semantic_query import ObjectCandidate
-                        candidates=[]
+                        by_observation={o.observation_id:c for o,c in zip(objects,candidates)}
+                        projected_candidates=[]
                         for projection in projections:
                             o=projection.detection
-                            c=ObjectCandidate(tuple(o.box_xyxy),o.confidence,o.label,o.source,o.mask.copy())
+                            c=by_observation[o.observation_id]
                             c.entity_id=self.core.entities.observation_entity.get(o.observation_id)
                             c.projection={"state":"OBSERVED_DEPTH","center_m":projection.center.tolist(),
                                 "source_timestamp_s":used.timestamp_s}
-                            candidates.append(c)
-                        self.tracker.initialize(used,SemanticQuery.from_command(TextCommand("background/common")),candidates)
-                        for recent in self.recent_frames:
-                            if recent.timestamp_s>used.timestamp_s:self.tracker.update(recent)
+                            projected_candidates.append(c)
                         self.runtime.run("query_memory",now_s,lambda:self._remember(used,
-                            [p.detection for p in projections],projections,candidates,"common_discovery"))
+                            [p.detection for p in projections],projections,projected_candidates,"common_discovery"))
+                    self.tracker.initialize(used,SemanticQuery.from_command(TextCommand("background/common")),candidates)
+                    for recent in self.recent_frames:
+                        if recent.timestamp_s>used.timestamp_s:self.tracker.update(recent)
                 else:
                     self.runtime.mark("object_detector",Health.STALE,"Background result too old")
         if self.runtime.due("resource_metrics",now_s):
@@ -252,6 +261,19 @@ class PerceptionPipeline:
         self._poll("viewer",now_s)
         return snapshot
 
+    def _tracked_depth(self,frame):
+        """Current depth under a flow mask is estimated track geometry, not a new semantic verification."""
+        if not np.isfinite(frame.depth_m).any():
+            return
+        for t in self.tracker.active():
+            o=ObjectObservation2D(frame.frame_id+":"+t.track_id,frame.frame_id,t.candidate.mask,
+                {t.candidate.detector_match:1.},t.candidate.score,"estimated optical-flow mask")
+            p=project_object(frame,o)
+            t.candidate.evidence["tracked_depth"] = ({"state":"ESTIMATED_MASK_MEASURED_DEPTH",
+                "center_m":p.center.tolist(),"source_timestamp_s":frame.timestamp_s,
+                "verified_source_s":t.verified_s,"valid_depth_fraction":p.valid_depth_fraction} if p is not None else
+                {"state":"UNAVAILABLE","reason":"Insufficient aligned depth under tracked mask"})
+
     def snapshot(self,now_s):
         queries=[]
         for r in self.results.values():
@@ -264,6 +286,9 @@ class PerceptionPipeline:
                     q["state"],q["reason"]="STALE","Detector verification expired; no fresh object claim"
             queries.append(q)
         return {"timestamp_s":now_s,"queries":queries,
+            "input_kind":"immutable still" if self.latest_frame and self.latest_frame.source in ("RGB_FILE","MEASURED_NYU_REGISTERED_STILL","MEASURED_RGBD_FILE") else "sequence/camera",
+            "active_query":self.pending_query[1].normalized if self.pending_query else None,
+            "observation_age_s":None if self.latest_frame is None else max(0.,now_s-self.latest_frame.timestamp_s),
             "tracks":[{"track_id":t.track_id,"queries":sorted(t.queries),"state":str(t.state),"reason":t.reason,
                 "verified_age_s":max(0.,now_s-t.verified_s),"candidate":t.candidate.summary(),
                 "mask":None if t.state!=QueryState.FOUND else t.candidate.mask.copy()} for t in self.tracker.tracks.values()],
