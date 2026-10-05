@@ -1,0 +1,160 @@
+{
+  "format_version": 1,
+  "dataset": "official NYU Depth V2 labeled mat",
+  "scene_selection": "First labeled frame of each specified type excluding development rooms; selected before model comparison",
+  "rooms": [
+    {
+      "index": 49,
+      "scene": "living_room_0000",
+      "split": "development",
+      "type": "living_room"
+    },
+    {
+      "index": 2,
+      "scene": "office_0003",
+      "split": "development",
+      "type": "office"
+    },
+    {
+      "index": 145,
+      "scene": "living_room_0004",
+      "split": "heldout",
+      "type": "living_room"
+    },
+    {
+      "index": 283,
+      "scene": "classroom_0001",
+      "split": "heldout",
+      "type": "classroom"
+    },
+    {
+      "index": 332,
+      "scene": "computer_lab_0001",
+      "split": "heldout",
+      "type": "computer_lab"
+    },
+    {
+      "index": 55,
+      "scene": "bedroom_0011",
+      "split": "heldout",
+      "type": "bedroom"
+    },
+    {
+      "index": 0,
+      "scene": "kitchen_0004",
+      "split": "heldout",
+      "type": "kitchen"
+    },
+    {
+      "index": 638,
+      "scene": "student_lounge_0001",
+      "split": "heldout",
+      "type": "student_lounge"
+    }
+  ],
+  "queries": {
+    "sofa": [
+      "sofa"
+    ],
+    "couch": [
+      "sofa"
+    ],
+    "chair": [
+      "chair"
+    ],
+    "backpack": [
+      "backpack"
+    ],
+    "bag": [
+      "bag",
+      "backpack"
+    ],
+    "water bottle": [
+      "bottle"
+    ],
+    "monitor": [
+      "monitor"
+    ],
+    "screen": [
+      "monitor"
+    ],
+    "notebook": [
+      "notebook"
+    ],
+    "keyboard": [
+      "keyboard"
+    ],
+    "trash can": [
+      "garbage bin"
+    ],
+    "garbage bin": [
+      "garbage bin"
+    ],
+    "pillow": [
+      "pillow"
+    ],
+    "lamp": [
+      "lamp"
+    ],
+    "bookshelf": [
+      "bookshelf"
+    ],
+    "cabinet": [
+      "cabinet"
+    ],
+    "whiteboard": [
+      "whiteboard"
+    ],
+    "power strip": [
+      "power strip"
+    ],
+    "whiteboard eraser": [
+      "whiteboard eraser"
+    ],
+    "fire extinguisher": [
+      "fire extinguisher"
+    ],
+    "door": [
+      "door"
+    ],
+    "charging brick": [
+      "charger"
+    ],
+    "red toolbox": [
+      "toolbox"
+    ],
+    "flarblenox": []
+  },
+  "non_coco": [
+    "bookshelf",
+    "cabinet",
+    "charging brick",
+    "door",
+    "fire extinguisher",
+    "lamp",
+    "notebook",
+    "pillow",
+    "power strip",
+    "whiteboard",
+    "whiteboard eraser"
+  ],
+  "metrics": "box IoU >= 0.5 against any annotated instance; mask IoU; raw aligned depth projection. Absent label is annotation-level absence, not exhaustive proof beyond the image.",
+  "model_spec": {
+    "grounding-dino": {
+      "threshold": 0.4,
+      "size": 512
+    },
+    "owlv2": {
+      "threshold": 0.4,
+      "size": 512
+    },
+    "verified": {
+      "primary_threshold": 0.45,
+      "verifier_threshold": 0.15,
+      "minimum_box_iou": 0.3,
+      "verifier_size": 512,
+      "selected_on": "development rooms only"
+    }
+  },
+  "limitations": "Rooms held out from SCOPE development; unknown overlap with upstream pretraining. Water bottle is evaluated as bottle; contents/brand not verified. Red toolbox negatives require no annotated toolbox."
+}

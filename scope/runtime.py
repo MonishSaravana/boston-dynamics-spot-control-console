@@ -94,6 +94,20 @@ class Runtime:
         state = self.state(name)
         state.status, state.reason = status, reason
 
+    def observe(self, name, timestamp_s, duration_ms, *, output=None, source="", metadata=None):
+        """Consume a worker's measured result on the owning pipeline thread."""
+        state = self.state(name)
+        state.durations_ms.append(duration_ms)
+        state.last_output, state.last_success_s = output, timestamp_s
+        state.input_timestamp_s = timestamp_s
+        state.source = source
+        if metadata is not None:
+            state.metadata = dict(metadata)
+        state.success_times_s.append(timestamp_s)
+        state.success_host_times_s.append(time.monotonic())
+        state.successes += 1
+        self.mark(name, Health.OK, "Measured worker output")
+
     def due(self, name, timestamp_s):
         if not math.isfinite(timestamp_s):
             raise ValueError("Source timestamp must be finite")
@@ -174,6 +188,12 @@ class Runtime:
                 "successes": state.successes, "failures": state.failures,
                 "restarts": state.restarts, "dropped_inputs": state.dropped_inputs,
                 "queue_depth": state.queue_depth, "recent_failures": list(state.recent_failures),
+                "in_flight": getattr(state,"in_flight",False),
+                "current_latency_ms": state.durations_ms[-1] if state.durations_ms else None,
+                "backend": getattr(state, "metadata", {}).get("backend"),
+                "model": getattr(state, "metadata", {}).get("model"),
+                "device": getattr(state, "metadata", {}).get("device"),
+                "metadata": getattr(state, "metadata", {}),
             }
         return result
 
@@ -191,6 +211,7 @@ class LatestWorker:
         self.completed = deque(maxlen=1)
         self.dropped = 0
         self.closed = False
+        self.running = False
         self.condition = threading.Condition()
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
@@ -215,6 +236,7 @@ class LatestWorker:
                 if self.closed:
                     return
                 item, self.pending = self.pending, None
+                self.running = True
             start = time.perf_counter()
             try:
                 value, error = self.function(item), None
@@ -222,6 +244,7 @@ class LatestWorker:
                 log.exception("Inference worker failed")
                 value, error = None, f"{type(exc).__name__}: {exc}"
             with self.condition:
+                self.running = False
                 if self.completed:
                     self.dropped += 1
                 self.completed.append((item, value, error, (time.perf_counter()-start)*1000))
@@ -230,6 +253,11 @@ class LatestWorker:
     def queue_depth(self):
         with self.condition:
             return int(self.pending is not None)
+
+    @property
+    def in_flight(self):
+        with self.condition:
+            return self.running
 
     def close(self,timeout_s=.1):
         with self.condition:

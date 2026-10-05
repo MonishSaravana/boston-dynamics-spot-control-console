@@ -264,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
     from .human_cli import add_human_options, register_human_commands, run_human_command
     add_human_options(mapping, mapping=True)
     register_human_commands(commands)
+    from .perception_cli import register_perception_commands, run_perception_command
+    register_perception_commands(commands)
     audit = commands.add_parser("audit-perception", help="Measure the existing M4 models and module ablations")
     audit.add_argument("dataset", type=Path)
     audit.add_argument("--output", type=Path, required=True)
@@ -293,6 +295,11 @@ def main(argv: list[str] | None = None) -> int:
     from .memory_cli import register_memory_commands, run_memory_command
     register_memory_commands(commands)
     args = parser.parse_args(argv)
+    if args.command in ("query-object","perceive","hardware","capture-reality","prepare-reality","benchmark-reality"):
+        try:
+            return run_perception_command(args)
+        except (ValueError, RuntimeError) as exc:
+            parser.error(str(exc))
     if args.command == "audit-perception":
         from .perception_audit import audit
         try:

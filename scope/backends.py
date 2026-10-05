@@ -1,7 +1,6 @@
 """Explicit local inference devices and available host resource measurements."""
 
 import platform
-import resource
 
 
 def hardware_report():
@@ -12,11 +11,18 @@ def hardware_report():
         report.update(memory_bytes=psutil.virtual_memory().total,
                       cpu_percent=psutil.cpu_percent(), rss_bytes=psutil.Process().memory_info().rss)
     except ImportError:
-        report["peak_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        try:
+            import resource
+            peak=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            report["peak_rss_bytes"] = peak if platform.system()=="Darwin" else peak*1024
+        except ImportError:
+            report["peak_rss_bytes"] = None
     try:
         import torch
         report.update(torch=torch.__version__, mps_available=torch.backends.mps.is_available(),
                       cuda_available=torch.cuda.is_available(), torch_threads=torch.get_num_threads())
+        report["accelerator_allocated_bytes"] = (torch.mps.current_allocated_memory() if torch.backends.mps.is_available()
+            else torch.cuda.memory_allocated() if torch.cuda.is_available() else None)
     except ImportError:
         report.update(mps_available=None, cuda_available=None)
     return report

@@ -85,7 +85,7 @@ class MatchEvidence:
         return vars(self).copy()
 
 
-def match_evidence(obs: ObjectObservation3D, entity: WorldEntity) -> MatchEvidence:
+def match_evidence(obs: ObjectObservation3D, entity: WorldEntity, *, point_tree=None) -> MatchEvidence:
     probs = entity.class_probabilities
     class_affinity = sum(value * probs.get(name, 0.)
                          for name, value in obs.detection.class_probabilities.items())
@@ -98,7 +98,7 @@ def match_evidence(obs: ObjectObservation3D, entity: WorldEntity) -> MatchEviden
     overlap = _aabb_iou(obs.low - .03, obs.high + .03,
                         entity.low - .03, entity.high + .03)
     sample = obs.points_world[::max(1, len(obs.points_world) // 400)]
-    nearest = cKDTree(entity.points_world).query(sample, workers=1)[0]
+    nearest = (point_tree if point_tree is not None else cKDTree(entity.points_world)).query(sample, workers=1)[0]
     point_overlap = float(np.mean(nearest < .12))
     center_score = np.exp(-.5 * (normalized_distance / .45)**2)
     score = float(.20 * class_affinity + .30 * center_score +
@@ -161,7 +161,7 @@ class EntityStore:
             chosen = np.linspace(0, len(entity.points_world) - 1, 12000, dtype=int)
             entity.points_world = entity.points_world[chosen]
         entity.observation_ids.append(obs.observation_id)
-        entity.last_seen_s = obs.timestamp_s
+        entity.last_seen_s = max(entity.last_seen_s, obs.timestamp_s)
         entity.supporting_views.add(obs.detection.frame_id)
         entity.depth_valid_fraction = (entity.depth_valid_fraction * n +
                                        obs.valid_depth_fraction) / (n + 1)
@@ -174,7 +174,8 @@ class EntityStore:
         if len({o.observation_id for o in observations}) != len(observations):
             raise ValueError("Duplicate observation ID")
         prior = list(self.entities.values())
-        candidates = [[match_evidence(obs, entity) for entity in prior]
+        trees = {entity.entity_id: cKDTree(entity.points_world) for entity in prior}
+        candidates = [[match_evidence(obs, entity, point_tree=trees[entity.entity_id]) for entity in prior]
                       for obs in observations]
         assignments: dict[int, int] = {}
         if prior:
