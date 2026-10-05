@@ -264,6 +264,12 @@ def main(argv: list[str] | None = None) -> int:
     from .human_cli import add_human_options, register_human_commands, run_human_command
     add_human_options(mapping, mapping=True)
     register_human_commands(commands)
+    audit = commands.add_parser("audit-perception", help="Measure the existing M4 models and module ablations")
+    audit.add_argument("dataset", type=Path)
+    audit.add_argument("--output", type=Path, required=True)
+    audit.add_argument("--frames", type=int, default=6)
+    audit.add_argument("--start-frame", type=int, default=355)
+    audit.add_argument("--width", type=int, default=320)
     for name in ("detect", "project-objects", "entities"):
         stage = commands.add_parser(name, help=f"Inspect the {name} semantic stage")
         stage.add_argument("source", choices=("synthetic", "tum", "episode"))
@@ -287,6 +293,13 @@ def main(argv: list[str] | None = None) -> int:
     from .memory_cli import register_memory_commands, run_memory_command
     register_memory_commands(commands)
     args = parser.parse_args(argv)
+    if args.command == "audit-perception":
+        from .perception_audit import audit
+        try:
+            audit(args.dataset, args.output, args.frames, args.start_frame, args.width)
+        except (ValueError, RuntimeError) as exc:
+            parser.error(str(exc))
+        return 0
     if args.command in ("humans", "pointing", "telemetry", "benchmark-humans", "benchmark-ipo", "spot-sensors") or (
             args.command == "map" and args.humans):
         try:
