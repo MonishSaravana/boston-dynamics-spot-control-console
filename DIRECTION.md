@@ -1,5 +1,8 @@
 # SCOPE interface direction
 
+The first-pass direction below is retained as history. The current design starts
+at **Canvas workstation revision**; it supersedes the earlier shell and imagery choices.
+
 ## Brief
 
 User-supplied brief: unify the existing local consoles into Operate, Runs,
@@ -106,3 +109,106 @@ snapshots, backend sensors/perception/rendering use a worker, Stop bypasses
 that worker. Rerun remains the advanced 3D/timeline implementation.
 
 Voice: brief, exact about evidence, units and movement authorization.
+
+# Canvas workstation revision
+
+The user rejected the first pass as a card dashboard and supplied a complete
+new brief. This revision changes presentation architecture; the existing
+perception, world geometry, confirmation and guarded control adapters stay.
+The README and its screenshots are not changed pending the user's design review.
+
+## Current and keep contract
+
+Before renders: `output/workstation/before/`. The old vertically scrolling
+Operate page and equal-weight bordered regions obscure the work. Keep every
+manual command, typed/point/direct TargetCandidate path, confirm/reject,
+destination and separate GO, modes, camera policy/pair controls, module controls,
+artifact inspection, Rerun and every original CLI. Lose permanent helper copy,
+repeated demo warnings, preview cards and form-like page scrolling.
+
+## Explorations
+
+A: SCOPE is an optical workbench. An image ground, quiet Helvetica UI,
+mint action, full canvas and a changing inspector. Chosen for its camera scale
+and the simple separation of the world from the tools around it.
+B: SCOPE is a survey desk. Cool light ground, monospaced figures, blue selection,
+occupancy diagram and a split instrument shell. Rejected: too much technical
+text texture, and it does not match the requested dark workstation.
+C: SCOPE is an editing suite. Slate colour ground, condensed type, amber controls,
+image composition and a horizontal editing shell. Rejected: narrow-width failure,
+cinematic treatment and mock annotations risk confusing imagery with geometry.
+All six desktop/phone exploration renders were inspected. These are direction
+prototypes, not evidence of robot functionality. Production has no made-up
+annotation on the lab image.
+
+The history exception is deliberate: the user's dark robotics references and
+existing mint action language remain. Changing four arbitrary look columns
+would miss this corrective brief. The source, canvas shell and photographic
+review fixture change; the palette does not determine the architecture.
+
+## Shell, tokens and content
+
+A 66 px top bar, 72 px workspace rail, full-height central canvas, 306 px
+context inspector and 32 px status footer. A single raised inspector surface;
+straight dock boundaries, 4 px controls and 8 px floating dialogs. No outer
+page scrolling on desktop. Inspectors and technical libraries scroll internally.
+Live and World inspectors can resize or collapse. Top-down map has bounded zoom and fit.
+
+Live: Camera / World / Split; Find or target an object; Use pointing; Sources.
+Empty inspector: Find an object; Manual robot controls. Candidate: target label,
+processing frame, world position/frame, evidence age/score/source; Confirm target;
+Reject. Confirmed: Destination ready; destination in m, heading in degrees,
+standoff and clearance in m, route evidence; GO; Refresh. Stop remains red and
+reachable above every workspace and is labeled separately from class E-stop.
+
+World: actual occupancy, entities, robot, target/route, optional metric grid;
+selectable entity bounds and an inspector; 3D · Rerun; recorded Rerun.
+History: bounded local artifact list and read-only payload inspector.
+Debug: copyable current evaluation and retained tool commands; diagnostics drawer.
+Manual drawer: existing power, stand, held controls, 0.05–0.35 m/s speed,
+0–10 cm height and ±5° roll/pitch, measured model, gesture controls.
+Sources dialog: independent acquire/process/display/rate, exactly one processing pair.
+Footer: Observe / Dry run / Robot control. Dry run remains accessible pending
+physical validation. Mode changes retain the existing Stop behavior.
+
+Neutral grounds #101619 / #181f23 / #0b1114, text #ecf0f1 and #a7b4b9,
+mint #a5e7d3 for chosen action/route, amber #e5bd74 only for the selected
+world target, red #ca2c3d only for Stop. Helvetica Neue has compact small-size
+metrics familiar in desktop creation tools; Helvetica/Arial are local fallbacks.
+UI scale 12/13/14/16/18/23 px, figures tabular. No downloaded fonts.
+
+## Honest imagery and geometry
+
+`web/fixtures/lab-review.png` is generated, mock-only engineering-lab imagery.
+Built-in imagegen; prompt: photorealistic wide university engineering laboratory
+at 0.7 m camera height, concrete floor, workbench, gray sofa/chair, glass
+partitions, unbranded equipment shelves; neutral documentation photograph;
+no people, robot, text, overlays or watermark. The generated image is never
+submitted to perception or used for targeting/map geometry. Demo camera can
+switch to the original sensor fixture. Selecting a demo target foregrounds
+actual world geometry; the inspector shows its actual processing frame.
+Production sensor mode never displays this fixture. One top-bar Demo data
+indicator supplies compact provenance; detailed provenance remains in diagnostics.
+
+Occupancy paths coalesce current topdown cells from the existing mapping config.
+No room walls, footprints, routes or confidence values are invented. Entity
+bounds derive from world AABBs; robot orientation from measured/fixture pose;
+destination and sampled route from the existing preview. Unknown remains dark;
+free regions are neutral slate; occupied cells a muted steel tone. Actual entity IDs appear where space permits, with collision suppression and
+selected priority. Short leaders connect labels to their own bounds; native hover
+titles retain suppressed IDs. Isometric occupancy remains a projection of the same
+2D data. Full 3D stays in the existing Rerun viewer, launched from recordings.
+
+## State and performance
+
+The signature is the inspector changing from evidence to destination while
+its world route becomes visible (160 ms opacity, immediate reduced motion).
+No continuous animation, WebGL decoration, new model or sensor processing.
+Map updates keep their cached signature; resize is batched into one frame;
+image fixtures load once and sensor frames retain the existing version checks.
+Empty/no map, unavailable frame, unmatched query, stale approval, locked mode,
+failed connection, filtered library and missing model states stay explicit.
+Expired previews retain target identity and coordinates for review, but change
+the heading to Review destination and explain the disabled GO beside the action.
+Opening drawers clears movement, and manual close/cancel releases movement.
+Keyboard drive is additionally blocked in source/connection/diagnostic dialogs.

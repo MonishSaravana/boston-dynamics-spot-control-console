@@ -1,4 +1,4 @@
-# Unified local console
+# SCOPE workstation
 
 This pass joins the existing interfaces on `codex/m5-live-spot-interaction`.
 It adds no model, fusion system or planner. M5 remains **READY FOR PHYSICAL
@@ -18,19 +18,28 @@ For the sensor connection form, omit `--demo`. Observe is the default.
 The managed macOS launcher follows `main`, so use this checkout's command
 for the development branch. Nothing in this pass was merged into `main`.
 
-## Operate
+## Live
+
+The rail opens Live, World, History and Debug. Camera / World / Split switch
+the central canvas; the inspector changes from interaction to evidence to
+destination. The inspectors resize and collapse; long evidence scrolls inside them.
+Control and Inspect open bottom drawers. Desktop workspaces fill the window
+without page scrolling. Existing URL hashes are retained.
 
 Type `chair`, select a candidate, inspect the box and world evidence, then
-**CONFIRM TARGET**. Inspect destination x/y in meters, heading in degrees,
+**Confirm target**. Inspect destination x/y in meters, heading in degrees,
 standoff, clearance and sampled route before **GO**. Confirmation alone
-never dispatches. Expand Developer telemetry for the unrounded SE2 destination
+never dispatches. Open **Inspect → Stages & command telemetry** for the unrounded SE2 destination
 (x/y in meters, yaw in radians and world frame). GO consumes its preview. Stop or a settings change clears
 approval; preview again only after inspecting current evidence.
+The existing ten-second preview limit disables GO. The inspector retains the
+target and coordinates, shows Review destination / Refresh required, and explains
+the expired preview beside GO. Refresh still performs the existing checks.
 
 **Use pointing** produces the same TargetCandidate. It requires human pose
 to be enabled when connecting and sufficient existing geometric evidence;
 an unresolved ranking abstains. In demo it is explicitly **Simulate
-pointing**, using a fixture rather than a detected person. **Maps → select
+pointing**, using a fixture rather than a detected person. **World → select
 entity → Use as target** enters the same confirmation path.
 
 Targets and destinations live in the world/odom frame. Camera source is
@@ -38,7 +47,7 @@ provenance, not an allowed travel direction. The facing arrow and numeric
 heading show a turn toward targets behind the robot. Camera switching or
 automatic reacquisition during navigation has not been added.
 
-Manual controls remain under Operate: Power On, Stand, held W/A/S/D or arrow
+Manual controls remain under **Control** on the rail: Power On, Stand, held W/A/S/D or arrow
 buttons, 0.05–0.35 m/s speed, requested height 0–10 cm and roll/pitch ±5°,
 Apply, gesture mode, five fisheye views, split and approximate panorama.
 Manual motion/posture/gesture requests are blocked during active GO. The
@@ -55,8 +64,8 @@ Observe for a connection that has no command authority.
 
 ## Cameras and modules
 
-Camera Settings shows real discovered sources, independent acquisition,
-display and request rate (above 0 through 30 Hz), plus exactly one selected
+**Live → Camera or Split → Sources** shows real discovered sources, independent
+acquisition, processing, display and request rate (0.2–30 Hz), plus exactly one selected
 visual/depth processing pair. Additional display feeds do not imply
 multi-camera Spot mapping. Alignment verification is a physical operator
 prerequisite, not a calibration function. Unverified/missing depth permits
@@ -66,20 +75,23 @@ Acquire and display the desired feeds for split view. The retained manual
 session's panorama needs fresh front-left and front-right frames; stitching
 and measured model telemetry currently use that command-connected session.
 Read-only Observe connections still provide individual and split sources.
-Human pose/model initialization is selected when connecting. Expand
-Developer modules for enable/rate controls and detailed stage timing.
+Human pose/model initialization is selected when connecting. Open
+**Inspect** for module enable/rate controls and detailed stage timing. Processing
+a source does not add another fusion input: only the chosen visual/depth pair
+feeds the current pipeline. Changing any source policy clears target approval
+and destination; source toggles cannot authorize a move.
 
-## Maps, Runs and Evaluate
+## World, History and Debug
 
-Maps provides current occupancy/free/unknown, entities, robot pose, selected
+World provides current occupancy/free/unknown, entities, robot pose, selected
 target and route, layer toggles, world units and an entity inspector. Its
 isometric projection is a view of the same occupancy data, not a reconstructed
-point cloud. **Advanced 3D / Rerun** explains the existing viewer workflow;
-**Runs → choose .rrd → Open in Rerun** launches recorded 3D inspection.
+point cloud. **3D · Rerun** lists actual local recordings and launches native Rerun;
+**History → choose .rrd → Open in Rerun** does the same.
 Point clouds, meshes, skeletons, pointing rays, camera frustums, memory layers,
 entity history and playback timelines retain their existing CLI/Rerun paths.
 
-Runs discovers the latest 500 supported local artifacts in configured roots.
+History discovers the latest 500 supported local artifacts in configured roots.
 JSON inspection is limited to 2 MB. Memory SQLite databases are read only,
 with up to 100 recent episode, belief and event payloads each. Saved maps
 show metadata/counts and their viewer command; meshes/RGB-D episodes retain
@@ -87,8 +99,8 @@ CLI replay. Symbolic links and paths outside configured roots cannot open
 private files. No cloud storage or automatic capture upload is introduced.
 Use a narrower `--runs-dir` to browse older sessions beyond the index limit.
 
-Evaluate offers existing perception, mapping, pointing/human, memory,
-entity and test commands, results through Runs, and current module health.
+Debug offers existing perception, mapping, pointing/human, memory,
+entity and test commands, results through History, and current module health.
 It does not silently start benchmarks or download model bundles. Replace
 shown dataset/path placeholders before copying a command.
 
@@ -105,6 +117,53 @@ The original entry points remain:
 .venv/bin/python -m scope replay-memory --db MEMORY_DB
 ```
 
+## Capability locations
+
+| Existing capability | Access in this revision |
+| --- | --- |
+| M1 occupancy, free/unknown, robot pose, metric grid | World; Live → World or Split for the current target/route |
+| M1 point clouds, TSDF/meshes, camera poses and frustums | World → 3D · Rerun; existing Rerun layers and timeline |
+| M1 map creation/save/load and RGB-D replay | Debug → Mapping and Retained tools → Map reload / viewer; History → saved map metadata and viewer command |
+| M2 detection, semantic entities, geometric evidence | World → entity inspector; Live → candidate processing frame and Evidence details; Inspect → module controls |
+| M3 global entities, episodes, last seen, changes, supporting evidence | History → memory.sqlite read-only episode/belief/event payloads; Debug → Retained tools → Memory episode & history / Memory replay; Rerun memory layers |
+| M4 human pose, skeletons, pointing cones/rays | Enable human pose in Connection; Live → Use pointing enters shared target flow; World → 3D · Rerun for full recorded geometry; Debug → Multi-camera humans |
+| M4 telemetry | Inspect → module health, enable/rate controls and raw module/source/stage data, including ages, dropped inputs, host/source rates and backend |
+| M4.5 open-vocabulary queries, segmentation, tracking, detector toggles | Live search; Inspect → existing runtime module switches/rates; Debug → Common perception for all retained CLI options |
+| M5 typed, pointing and direct TargetCandidate | Live search / Use pointing; World → select entity → Use as target |
+| M5 confirm/reject, destination, standoff, clearance, heading, route | Live contextual inspector and World canvas; Confirm does not dispatch |
+| M5 Observe, Dry run, Robot control, separate GO | Footer mode selector; Connection → explicit Robot control authority; Live → GO |
+| Spot power, stand, speed, held keyboard/button drive, requested posture | Control drawer; speed 0.05–0.35 m/s, height 0–10 cm, roll/pitch ±5° |
+| Gesture control and measured/simulated robot model | Control → Robot model → Model & gesture details |
+| Fisheye, split, approximate panorama and camera source policy | Live camera selector and Sources; acquire/process/display/rate plus processing pair |
+| Evaluations and original Qt interfaces | Debug → Evaluation commands and Retained tools; copy commands, no automatic benchmark execution |
+
+## Design review imagery and limits
+
+`web/fixtures/lab-review.png` is a generated mock photograph used only when
+the offline demo selects the lab preview. **Sensor fixture** switches back to
+the existing procedural RGB-D view. The mock photograph never reaches the
+sensor adapter or perception pipeline, has no fabricated detection overlay,
+and is not evidence of Spot imagery or map accuracy. Live connections show
+the selected actual stream. Candidate thumbnails still show the actual
+processing frame, so a demo target foregrounds World rather than annotating
+the unrelated lab photograph.
+
+The map derives from `mapping.config` and `mapping.topdown`, plus current
+entity AABBs, robot pose and destination/route. No walls or room geometry are
+added for appearance. The demo map is therefore still a simple room. Native
+Rerun is the chosen advanced 3D architecture: it preserves richer real outputs
+and playback without building a competing renderer. It opens in a separate
+window; there is no embedded point-cloud canvas or browser playback timeline.
+The browser does not project live skeletons onto its 2D occupancy canvas.
+
+Live and World inspectors resize or collapse; drawers are docked rather
+than freely rearrangeable. History exposes bounded artifact and memory payloads,
+not a new graphical event-history editor. On small screens, detailed inspector
+content scrolls internally. These are current UI limits, not future capability
+claims. README screenshots remain unchanged pending the user's review.
+At 320px the map shrinks to keep captions clear; annotations are omitted
+when they cannot fit safely, retaining world markers and inspector coordinates.
+
 ## Safety and verification limits
 
 Stop advances the command epoch before waiting for perception. It clears
@@ -117,7 +176,7 @@ queued or in-progress manual request blocks final navigation dispatch.
 The class E-stop remains a separate process; GUI Stop is a zero-velocity
 request, not an E-stop.
 
-Offline verification: 118 unittest cases, 115 passed and 3 existing optional
+Offline verification: 119 unittest cases, 116 passed and 3 existing optional
 external-dataset checks skipped. Added integration checks cover the shared target
 paths, virtual/dry/Observe authority, target revisions, behind-robot heading,
 Stop during slow planning and a full queue, presence expiry, disconnect lock

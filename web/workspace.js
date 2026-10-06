@@ -8,6 +8,12 @@ let moduleSignature = "";
 let candidateSignature = "";
 let policySignature = "";
 let confirmedState = null;
+let worldZoom = 1;
+let liveView = "camera";
+let reviewFixture = true;
+let evidenceVersion = null;
+let priorSelected = null;
+let inspectorPhase = null;
 const NS = "http://www.w3.org/2000/svg";
 const modeCopy = {
   observe: "Sensors and perception only. No movement authorization.",
@@ -57,24 +63,36 @@ function el(tag, attributes = {}, text) {
 
 function drawMap(svg, ws, large = false) {
   svg.replaceChildren();
+  const width = svg.clientWidth || 900,
+    height = svg.clientHeight || 650;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const mapping = ws?.mapping;
   if (!mapping) {
     svg.append(
       el(
         "text",
-        { x: 30, y: 80, class: "map-empty" },
-        "Map requires a verified RGB-D pair",
+        {
+          x: width / 2,
+          y: height / 2,
+          "text-anchor": "middle",
+          class: "map-empty",
+        },
+        "No verified world geometry",
       ),
     );
     return;
   }
-  const width = large ? 700 : 360,
-    height = large ? 620 : 360;
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const config = mapping.config,
-    [nx, ny] = config.shape;
-  const pad = large ? 64 : 16;
-  const scale = Math.min((width - pad * 2) / nx, (height - pad * 2) / ny);
+    [nx, ny] = config.shape,
+    pad = Math.min(
+      large ? 74 : 58,
+      Math.max(18, Math.min(width, height) * 0.12),
+    );
+  const zoom = large ? worldZoom : 1;
+  // Fit short canvases between the fixed caption bands.
+  const verticalPad = Math.max(40, pad);
+  const scale =
+    Math.min((width - pad * 2) / nx, (height - verticalPad * 2) / ny) * zoom;
   const ox = (width - nx * scale) / 2,
     oy = (height - ny * scale) / 2;
   const point = (x, y) => [
@@ -82,35 +100,57 @@ function drawMap(svg, ws, large = false) {
     height - oy - ((y - config.origin[1]) / config.voxel_m) * scale,
   ];
   const enabled = (key) =>
-    !large || document.querySelector(`[data-layer="${key}"]`).checked;
+    !large || document.querySelector(`[data-layer="${key}"]`)?.checked;
   const content = el("g");
+  const entityLabels = [];
+  const length =
+    Math.max(1, Math.round(Math.min(100, width * 0.15) / scale)) *
+    config.voxel_m;
+  const pixels = (length / config.voxel_m) * scale;
+  // Keep labels clear of the docked captions and the metric scale.
+  const labelBounds = [
+    [0, 0, width, 52],
+    [0, height - 42, width, height],
+    [18, height - 98, Math.max(78, 30 + pixels), height - 60],
+  ];
+  const footprintBounds = [];
+  const reserveLabel = (x, y, text, size = 12) => {
+    const box = [x - 3, y - size - 2, x + text.length * size * 0.6 + 3, y + 4];
+    labelBounds.push(box);
+    return box;
+  };
   svg.append(content);
   if (large && $("map-view").value === "iso")
     content.setAttribute(
       "transform",
-      "translate(70 -45) matrix(.82 .15 -.22 .72 90 55)",
+      `translate(${width / 2} ${height / 2}) matrix(.9 .18 -.3 .75 0 0) translate(${-width / 2} ${-height / 2})`,
     );
   if (enabled("occupancy")) {
-    const colors = ["#142023", "#30423d", "#766853"];
-    // Combine each row's equal cells into spans; bounded SVG work, no canvas loop.
-    for (let i = 0; i < nx; i++) {
-      let j = 0;
-      while (j < ny) {
-        const type = mapping.topdown[i][j];
-        let end = j + 1;
-        while (end < ny && mapping.topdown[i][end] === type) end++;
-        content.append(
-          el("rect", {
-            x: ox + i * scale,
-            y: height - oy - end * scale,
-            width: scale + 0.1,
-            height: (end - j) * scale + 0.1,
-            fill: colors[type],
-          }),
-        );
-        j = end;
+    // Exact current topdown cell classification, coalesced into paths, without inventing walls.
+    const paths = ["", "", ""];
+    for (let x = 0; x < nx; x++) {
+      let y = 0;
+      while (y < ny) {
+        const type = mapping.topdown[x][y];
+        let end = y + 1;
+        while (end < ny && mapping.topdown[x][end] === type) end++;
+        if (type === 1 || type === 2) {
+          const px = ox + x * scale,
+            py = height - oy - end * scale;
+          paths[type] +=
+            `M${px} ${py}h${scale + 0.05}v${(end - y) * scale + 0.05}h${-scale - 0.05}z`;
+        }
+        y = end;
       }
     }
+    if (paths[1])
+      content.append(el("path", { d: paths[1], class: "map-cells map-free" }));
+    if (paths[2])
+      content.append(
+        el("path", { d: paths[2], class: "map-cells map-occupied" }),
+      );
+  }
+  if (document.querySelector('[data-layer="grid"]')?.checked) {
     for (let i = 0; i <= nx; i += 10)
       content.append(
         el("line", {
@@ -141,47 +181,58 @@ function drawMap(svg, ws, large = false) {
         (large && currentEntity === entity.entity_id);
       const group = el("g", {
         class: "map-entity",
-        ...(large ? { tabindex: "0" } : {}),
+        tabindex: "0",
         role: "button",
         "aria-label": `Select ${entity.entity_id}`,
       });
+      group.append(el("title", {}, entity.entity_id));
+      footprintBounds.push([x1 - 4, y2 - 4, x2 + 4, y1 + 4]);
+      // 30px also retains 24px screen bounds in the isometric projection.
+      const hitWidth = Math.max(30, x2 - x1),
+        hitHeight = Math.max(30, y1 - y2);
+      group.append(el("rect", {
+        x: (x1 + x2 - hitWidth) / 2,
+        y: (y1 + y2 - hitHeight) / 2,
+        width: hitWidth,
+        height: hitHeight,
+        class: "entity-hit",
+        fill: "transparent",
+        stroke: "none",
+        "pointer-events": "all",
+      }));
       group.append(
         el("rect", {
           x: x1,
           y: y2,
           width: Math.max(3, x2 - x1),
           height: Math.max(3, y1 - y2),
-          fill: selected ? "#edc76e33" : "#11191966",
-          stroke: selected ? "#edc76e" : "#afc2bc",
-          "stroke-width": selected ? 2 : 1,
+          rx: 1,
+          class: "entity-bound",
+          fill: selected ? "#e5bd7410" : "#9badb908",
+          stroke: selected ? "#e5bd74" : "#8ea4b0",
+          "stroke-width": selected ? 1.5 : 1,
+          "vector-effect": "non-scaling-stroke",
         }),
       );
-      // Close neighbors use opposing label anchors to preserve readable names.
-      const anchor = entity.entity_id.toLowerCase().includes("backpack")
-        ? "end"
-        : "start";
-      const labelY = entity.entity_id.toLowerCase().includes("backpack")
-        ? y2 - 14
-        : y1 + 16;
-      group.append(
-        el(
-          "text",
-          {
-            x: anchor === "end" ? x2 - 2 : x1 + 2,
-            y: labelY,
-            "text-anchor": anchor,
-          },
-          entity.entity_id,
-        ),
-      );
+      if (selected) {
+        const l = 7;
+        group.append(
+          el("path", {
+            d: `M${x1 - 3} ${y2 + l}v${-l - 3}h${l + 3}M${x2 - l} ${y2 - 3}h${l + 3}v${l + 3}M${x2 + 3} ${y1 - l}v${l + 3}h${-l - 3}M${x1 + l} ${y1 + 3}h${-l - 3}v${-l - 3}`,
+            fill: "none",
+            stroke: "#e5bd74",
+            "stroke-width": 1.5,
+            "vector-effect": "non-scaling-stroke",
+          }),
+        );
+      }
+      entityLabels.push({ group, entity, selected, x1, x2, y1, y2 });
       const select = () => {
         currentEntity = entity.entity_id;
         renderEntity(ws);
         mapSignature = "";
         if (!large) workspaceAction("select", { entity_id: entity.entity_id });
-        else {
-          drawMap(svg, ws, true);
-        }
+        else drawMap(svg, ws, true);
       };
       group.addEventListener("click", select);
       group.addEventListener("keydown", (e) => {
@@ -192,9 +243,10 @@ function drawMap(svg, ws, large = false) {
       });
       content.append(group);
     }
+  const annotations = el("g");
   if (enabled("route") && ws.destination) {
     const p = ws.destination;
-    content.append(
+    annotations.append(
       el("path", {
         d: p.route_xy_m
           .map((xy, i) => (i ? "L" : "M") + point(...xy).join(" "))
@@ -203,59 +255,159 @@ function drawMap(svg, ws, large = false) {
       }),
     );
     const [x, y] = point(p.x_m, p.y_m);
-    content.append(el("circle", { cx: x, cy: y, r: 6, fill: "#9aebd2" }));
-    const hx = x + 24 * Math.cos(p.yaw_rad),
-      hy = y - 24 * Math.sin(p.yaw_rad);
-    content.append(
-      el("line", { x1: x, y1: y, x2: hx, y2: hy, class: "map-heading" }),
+    annotations.append(
+      el("circle", {
+        cx: x,
+        cy: y,
+        r: 5,
+        fill: "#10231c",
+        stroke: "#a5e7d3",
+        "stroke-width": 2,
+      }),
     );
-    content.append(
+    const hx = x + 30 * Math.cos(p.yaw_rad),
+      hy = y - 30 * Math.sin(p.yaw_rad);
+    annotations.append(
       el("path", {
-        d: `M${hx - 6 * Math.cos(p.yaw_rad - 0.5)} ${hy + 6 * Math.sin(p.yaw_rad - 0.5)} L${hx} ${hy} L${hx - 6 * Math.cos(p.yaw_rad + 0.5)} ${hy + 6 * Math.sin(p.yaw_rad + 0.5)}`,
+        d: `M${x} ${y}L${hx} ${hy}M${hx - 7 * Math.cos(p.yaw_rad - 0.5)} ${hy + 7 * Math.sin(p.yaw_rad - 0.5)}L${hx} ${hy}L${hx - 7 * Math.cos(p.yaw_rad + 0.5)} ${hy + 7 * Math.sin(p.yaw_rad + 0.5)}`,
         class: "map-heading",
         fill: "none",
       }),
     );
+    labelBounds.push([x - 12, y - 12, x + 12, y + 12]);
+    const destinationLabel = [
+      [Math.min(width - 86, x + 56), Math.max(46, y - 32)],
+      [x + 18, y + 34], [x - 96, y + 34],
+      [x - 96, y - 24], [x + 18, y - 24],
+    ].find(([lx, ly]) => {
+      const box = [lx - 3, ly - 14, lx + 82, ly + 4];
+      return box[0] >= 12 && box[2] <= width - 12 &&
+        box[1] >= 12 && box[3] <= height - 28 &&
+        ![...labelBounds, ...footprintBounds].some(b =>
+          box[0] < b[2] + 5 && box[2] > b[0] - 5 &&
+          box[1] < b[3] + 5 && box[3] > b[1] - 5);
+    });
+    if (destinationLabel) {
+      const [lx, ly] = destinationLabel;
+      annotations.append(el("path", {
+        d: `M${x} ${y}L${Math.max(lx, Math.min(lx + 79, x))} ${ly - 5}`,
+        class: "annotation-leader",
+      }));
+      annotations.append(el("text", {
+        x: lx, y: ly, class: "map-label destination-label",
+      }, "Destination"));
+      reserveLabel(lx, ly, "Destination", 12);
+    }
     if (ws.selected?.center_m) {
-      const target = point(...ws.selected.center_m);
+      const [tx, ty] = point(...ws.selected.center_m);
       content.append(
-        el("line", {
-          x1: x,
-          y1: y,
-          x2: target[0],
-          y2: target[1],
-          class: "target-ray",
-        }),
+        el("line", { x1: x, y1: y, x2: tx, y2: ty, class: "target-ray" }),
       );
     }
   }
   if (enabled("robot") && ws.robot) {
     const r = ws.robot,
       [x, y] = point(r.x_m, r.y_m);
-    content.append(el("circle", { cx: x, cy: y, r: 6, fill: "#eef3f1" }));
-    content.append(
-      el("line", {
-        x1: x,
-        y1: y,
-        x2: x + 22 * Math.cos(r.yaw_rad),
-        y2: y - 22 * Math.sin(r.yaw_rad),
-        class: "robot-heading",
+    const glyph = el("g", {
+      transform: `translate(${x} ${y}) rotate(${(-r.yaw_rad * 180) / Math.PI})`,
+    });
+    glyph.append(
+      el("circle", {
+        r: 10,
+        fill: "#122027",
+        stroke: "#506974",
+        "stroke-width": 1,
       }),
     );
+    glyph.append(el("path", { d: "M7 0L-5 -5L-3 0L-5 5Z", fill: "#e4edf1" }));
+    content.append(glyph);
+    const close =
+      ws.destination &&
+      Math.hypot(
+        ...point(ws.destination.x_m, ws.destination.y_m).map(
+          (v, i) => v - [x, y][i],
+        ),
+      ) < 44;
+    const preferredY = Math.min(height < 250 ? height - 52 : height - 28, close ? y + 29 : y - 14);
+    labelBounds.push([x - 12, y - 12, x + 12, y + 12]);
+    const labelPosition = [
+      [close ? x - 48 : x + 17, preferredY],
+      [x + 18, y + 30], [x - 48, y - 18], [x + 18, y - 18],
+      [x - 74, y + 46], [x + 18, y + 48], [x - 74, y - 40],
+    ].find(([lx, ly]) => {
+      const box = [lx - 3, ly - 14, lx + 39, ly + 4];
+      return box[0] >= 12 && box[2] <= width - 12 && box[1] >= 12 && box[3] <= height - 28 &&
+        ![...labelBounds, ...footprintBounds].some(b => box[0] < b[2] + 5 && box[2] > b[0] - 5 && box[1] < b[3] + 5 && box[3] > b[1] - 5);
+    });
+    if (labelPosition) {
+      const [lx, ly] = labelPosition;
+      annotations.append(
+        el("path", {
+          d: `M${x} ${y}L${Math.max(lx, Math.min(lx + 36, x))} ${ly - 5}`,
+          class: "annotation-leader",
+        }),
+      );
+      annotations.append(el("text", { x: lx, y: ly, class: "map-label" }, "Robot"));
+      reserveLabel(lx, ly, "Robot", 12);
+    }
   }
-  if (large)
-    svg.append(
-      el(
-        "text",
-        {
-          x: 12,
-          y: large ? height - 22 : height - 10,
-          fill: "#acb7b8",
-          "font-size": 12,
-        },
-        `1 grid interval = ${(config.voxel_m * 10).toFixed(1)} m · ${ws.world_frame}`,
-      ),
-    );
+  // Labels render above all footprints, with leaders to their own bounds.
+  // Suppress secondary labels when the canvas cannot place them safely.
+  const entityAnnotations = el("g", { "pointer-events": "none" });
+  for (const item of entityLabels.sort((a, b) => Number(b.selected) - Number(a.selected))) {
+    const { entity, selected, x1, x2, y1, y2 } = item;
+    const size = selected ? 13 : 12;
+    const textWidth = entity.entity_id.length * size * 0.6;
+    const positions = [
+      [x1, y2 - 16], [x2 + 16, y2 + 12],
+      [x1, y1 + 26], [x1 - textWidth - 16, y2 + 12],
+      [(x1 + x2 - textWidth) / 2, y2 - 22],
+      [(x1 + x2 - textWidth) / 2, y1 + 28],
+    ];
+    let position = null;
+    if (selected || (width >= 480 && height >= 300)) {
+      for (const [x, y] of positions) {
+        const box = [x - 3, y - size - 2, x + textWidth + 3, y + 4];
+        if (box[0] < 12 || box[2] > width - 12 || box[1] < 12 || box[3] > height - 28) continue;
+        if ([...labelBounds, ...footprintBounds].some((b) => box[0] < b[2] + 5 && box[2] > b[0] - 5 && box[1] < b[3] + 5 && box[3] > b[1] - 5)) continue;
+        position = [x, y];
+        reserveLabel(x, y, entity.entity_id, size);
+        break;
+      }
+    }
+    if (!position) continue;
+    const [x, y] = position;
+    const tx = Math.max(x, Math.min(x + textWidth, (x1 + x2) / 2));
+    const ty = y - 5;
+    const ax = Math.max(x1, Math.min(x2, tx));
+    const ay = Math.max(y2, Math.min(y1, ty));
+    entityAnnotations.append(el("path", {
+      d: `M${ax} ${ay}L${tx} ${ty}`,
+      class: "annotation-leader entity-leader",
+    }));
+    entityAnnotations.append(el("text", {
+      x, y,
+      class: "entity-label" + (selected ? " selected-label" : " context-label"),
+    }, entity.entity_id));
+  }
+  content.append(annotations);
+  content.append(entityAnnotations);
+  svg.append(
+    el("path", {
+      d: `M24 ${height - 70}v5h${pixels}v-5`,
+      stroke: "#a8bac4",
+      "stroke-width": 1.5,
+      fill: "none",
+    }),
+  );
+  svg.append(
+    el(
+      "text",
+      { x: 24, y: height - 80, class: "map-origin" },
+      `${length.toFixed(1)} m`,
+    ),
+  );
+  $("map-scale").textContent = ws.world_frame;
 }
 
 function renderEntity(ws) {
@@ -289,7 +441,7 @@ function renderEntity(ws) {
   ]);
   $("entity-history").textContent =
     JSON.stringify(entity, null, 2) +
-    "\n\nPersisted entity history and change events are available in recorded memory sessions under Runs.";
+    "\n\nPersisted entity history and change events are available in recorded memory sessions under History.";
   for (const button of $("entity-list").children)
     button.classList.toggle(
       "selected",
@@ -317,19 +469,17 @@ function updateWorkspace(ws, control) {
   if (ws.available && !control.demo) {
     $("mode-pill").textContent =
       ws.mode === "robot_control"
-        ? "ROBOT CONTROL"
+        ? "Spot connected"
         : ws.mode === "dry_run"
-          ? "DRY RUN"
-          : "OBSERVE";
+          ? "Spot connected"
+          : "Spot connected";
     $("connection-message").textContent = control.connected
       ? control.status
       : "Spot sensors connected · no command lease";
     $("connect-button").textContent = "Disconnect";
   }
   if (ws.available) {
-    $("image-badge").textContent = control.demo
-      ? "SYNTHETIC ROOM · NOT SPOT FOOTAGE"
-      : "SPOT CAMERA";
+    $("image-badge").textContent = control.demo ? "Demo data" : "Spot camera";
     const view = $("camera-select").value;
     if (view === "evidence") {
       $("image-title").textContent = ws.visual_source;
@@ -368,24 +518,26 @@ function updateWorkspace(ws, control) {
   $("destination-empty").textContent = ws.confirmed
     ? "Movement authorization cleared. Preview again before GO."
     : "Confirm a target to propose a destination.";
-  $("target-label").textContent = c ? c.entity_id : "No target selected";
+  $("target-label").textContent = c ? c.entity_id : "Find an object";
   $("target-explanation").textContent = c
     ? control.demo
-      ? "Synthetic fixture evidence"
+      ? `${c.label} · world geometry available`
       : `${c.label} · ${c.track_state} · ${c.source.toLowerCase()} selection`
-    : "Type an object, use pointing, or select a map entity.";
+    : "Search above, use pointing, or select in World.";
   details(
     $("target-details"),
     c
       ? [
           ["World position", xyz(c.center_m)],
-          ["World frame", c.world_frame || "Unavailable"],
           ["Evidence age", `${fixed(c.age_s, 1)} s`],
-          ["Evidence score", `${fixed(c.score)} · uncalibrated`],
+          ["Evidence score", `${fixed(c.score)} · heuristic`],
           ["Camera source", c.camera || ws.visual_source],
         ]
       : [],
   );
+  $("destination-target").textContent = ws.selected
+    ? `Target / ${ws.selected.entity_id}`
+    : "";
   $("target-raw").textContent = c
     ? JSON.stringify(c.evidence, null, 2)
     : "No candidate evidence";
@@ -423,7 +575,7 @@ function updateWorkspace(ws, control) {
   }
   const p = ws.destination;
   $("route-scale").textContent = ws.mapping
-    ? `Grid interval ${(ws.mapping.config.voxel_m * 10).toFixed(1)} m · ${ws.world_frame}`
+    ? `${ws.world_frame} · ${(ws.mapping.config.voxel_m * 100).toFixed(0)} cm cells`
     : "Scale unavailable until a verified map is present";
   $("destination-empty").hidden = !!p;
   $("route-readout").textContent = p
@@ -449,10 +601,10 @@ function updateWorkspace(ws, control) {
       : [],
   );
   $("go-button").textContent = control.demo
-    ? "GO · virtual"
+    ? "GO"
     : ws.mode === "dry_run"
       ? "GO · dry run"
-      : "GO · robot";
+      : "GO";
   $("go-button").disabled = !ws.can_go;
   $("go-note").textContent =
     ws.mode === "observe"
@@ -516,7 +668,7 @@ function updateWorkspace(ws, control) {
   }
   renderEntity(ws);
   $("map-source").textContent = ws.available
-    ? `${control.demo ? "SYNTHETIC ROOM" : "LIVE ODOM"} · ${ws.mapping?.revision || 0} map updates`
+    ? `${ws.world_frame} · ${ws.mapping?.revision || 0} updates`
     : "No map available";
   $("map-frame").textContent = ws.available
     ? `${ws.visual_source} + ${ws.depth_source || "no depth"} · ${ws.world_frame}`
@@ -547,12 +699,23 @@ function updateWorkspace(ws, control) {
     line.append(label, value);
     $("map-health").append(line);
   }
-  if ($("page-operate").querySelector(".developer").open)
+  if ($("diagnostic-drawer").open)
     $("telemetry").textContent = JSON.stringify(
       {
         control_mode: ws.mode,
         destination_preview: ws.destination,
         stages: ws.timings,
+        modules: ws.modules,
+        sources: ws.cameras,
+        backend: ws.backend_mode,
+        processing_pair: {
+          visual: ws.visual_source,
+          depth: ws.depth_source,
+          alignment_verified: ws.alignment_verified,
+        },
+        robot: ws.robot,
+        frame_versions: control.frame_versions,
+        worker_status: control.status,
       },
       null,
       2,
@@ -573,6 +736,7 @@ function updateWorkspace(ws, control) {
     }
   }
   if ($("settings-dialog").open) buildPolicies(ws);
+  updateWorkstation(ws, control);
 }
 
 function buildModules(rows) {
@@ -649,6 +813,12 @@ function buildPolicies(ws) {
   $("visual-source").value = ws.visual_source || "";
   $("depth-source").value = ws.depth_source || "";
   $("alignment-verified").checked = ws.alignment_verified;
+  $("alignment-label").textContent = ws.simulated
+    ? "Fixture alignment (synthetic)"
+    : "Alignment physically verified for this pair";
+  $("alignment-note").textContent = ws.simulated
+    ? "Fixed RGB-D geometry supplied by the synthetic fixture."
+    : "Measured calibration, timestamps and odom transforms are still checked. No world geometry or destination is authorized from an unverified pair.";
   for (const id of [
     "visual-source",
     "depth-source",
@@ -670,12 +840,18 @@ function buildPolicies(ws) {
     row.append(name);
     for (const [labelText, key] of [
       ["Acquire", "acquire"],
+      ["Process", "process"],
       ["Display", "display"],
     ]) {
       const label = document.createElement("label");
       const toggle = document.createElement("input");
       toggle.type = "checkbox";
-      toggle.checked = status[key === "acquire" ? "acquired" : "displayed"];
+      toggle.checked =
+        status[
+          { acquire: "acquired", process: "processed", display: "displayed" }[
+            key
+          ]
+        ];
       toggle.disabled = ws.simulated;
       label.append(toggle, document.createTextNode(labelText));
       toggle.addEventListener("change", () =>
@@ -694,7 +870,10 @@ function buildPolicies(ws) {
     hz.addEventListener("change", () =>
       workspaceAction("camera", { source, max_hz: Number(hz.value) }),
     );
-    row.append(hz);
+    const rate = document.createElement("label");
+    rate.className = "source-rate";
+    rate.append(hz, document.createTextNode("Hz"));
+    row.append(rate);
     $("camera-policies").append(row);
   }
   $("settings-message").textContent = ws.simulated
@@ -711,7 +890,7 @@ function route() {
   clearMovement();
   for (const page of document.querySelectorAll(".page"))
     page.hidden = page.id !== `page-${name}`;
-  for (const link of document.querySelectorAll(".topbar nav a")) {
+  for (const link of document.querySelectorAll(".workspace-rail > a")) {
     if (link.hash === `#${name}`) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
@@ -772,7 +951,7 @@ $("pair-form").addEventListener("submit", async (e) => {
   policySignature = "";
   buildPolicies(workspaceState);
 });
-$("rerun-help").addEventListener("click", () => $("rerun-dialog").showModal());
+$("rerun-help").addEventListener("click", openAdvanced3D);
 $("close-rerun").addEventListener("click", () => $("rerun-dialog").close());
 $("rerun-to-runs").addEventListener("click", () => $("rerun-dialog").close());
 $("map-runs-button").addEventListener("click", () => {
@@ -973,3 +1152,380 @@ function commandList(id, commands) {
 commandList("evaluation-commands", evaluationCommands);
 commandList("legacy-commands", legacyCommands);
 route();
+
+/* Canvas shell: presentation only. Actions still use the existing guarded adapters. */
+function updateCanvasSource(ws, control) {
+  if (!ws) return;
+  const showReview = control.demo && reviewFixture && $("camera-select").value === "evidence";
+  const camera = showReview ? "Lab preview" : names[$("camera-select").value] || ws.visual_source;
+  $("canvas-source").textContent = liveView === "world"
+    ? ws.world_frame
+    : liveView === "split"
+      ? `${camera} + ${ws.world_frame}`
+      : `Camera / ${camera}`;
+}
+function setLiveView(value) {
+  liveView = value;
+  $("live-layout").dataset.view = value;
+  for (const button of document.querySelectorAll("[data-live-view]"))
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.liveView === value),
+    );
+  mapSignature = "";
+  updateCanvasSource(workspaceState, state);
+  if (workspaceState)
+    requestAnimationFrame(() => drawMap($("route-map"), workspaceState));
+}
+function updateWorkstation(ws, control) {
+  const phase = ws.confirmed
+    ? "confirmed"
+    : ws.selected
+      ? "candidate"
+      : "empty";
+  document.querySelector(".target-column").dataset.phase = phase;
+  if (phase !== inspectorPhase) {
+    $("target-inputs").open = phase === "empty";
+    inspectorPhase = phase;
+    document.querySelector(".target-body").scrollTop = 0;
+  }
+  $("target-inputs").querySelector("summary").textContent = phase === "empty"
+    ? "Choose target" : "Change target";
+  $("inspector-heading").textContent =
+    phase === "confirmed"
+      ? "Destination"
+      : phase === "candidate"
+        ? "Target"
+        : "Interaction";
+  $("target-kind").textContent = ws.selected?.label || "Target";
+  $("evidence-thumbnail").hidden = !ws.selected;
+  if (ws.selected && evidenceVersion !== ws.version) {
+    evidenceVersion = ws.version;
+    loadImage("evidence", $("target-camera"));
+  }
+  if (ws.selected?.entity_id && priorSelected !== ws.selected.entity_id) {
+    if (control.demo) setLiveView("world");
+    $("live-layout").dataset.inspector = "open";
+    $("live-inspector-toggle").setAttribute("aria-expanded", "true");
+  }
+  priorSelected = ws.selected?.entity_id || null;
+  $("fixture-toggle").hidden = !control.demo;
+  const showReview =
+    control.demo && reviewFixture && $("camera-select").value === "evidence";
+  $("review-image").hidden = !showReview;
+  if (showReview && !$("review-image").getAttribute("src"))
+    $("review-image").src = "/fixtures/lab-review.png";
+  $("fixture-toggle").textContent = reviewFixture
+    ? "Sensor fixture"
+    : "Lab preview";
+  const evidenceOption = $("camera-select").querySelector(
+    'option[value="evidence"]',
+  );
+  if (evidenceOption)
+    evidenceOption.textContent = showReview ? "Lab preview" : "Evidence";
+  if (showReview) {
+    $("image-title").textContent = "Lab preview";
+    $("image-meta").textContent = "Visual fixture";
+  }
+  updateCanvasSource(ws, control);
+  $("canvas-selection").textContent = ws.selected
+    ? `Target / ${ws.selected.entity_id}`
+    : "No selection";
+  $("footer-status").textContent = ws.navigation_active
+    ? "Movement active"
+    : ws.confirmed
+      ? "Destination preview"
+      : ws.available
+        ? "Sensors available"
+        : "No sensor connection";
+  if (control.demo) $("mode-pill").textContent = "Demo data";
+  else if (ws.available) $("mode-pill").textContent = "Spot connected";
+  const defaultMessage = [
+    "SCOPE source updated.",
+    "Select a target",
+    "Target confirmed",
+    "Target rejected",
+    "Synthetic room; GO moves only the virtual robot",
+    "Candidate highlighted; confirm or reject",
+    "Destination previewed; GO is separate",
+    "",
+  ];
+  if (defaultMessage.includes(ws.message))
+    $("interaction-message").textContent = "";
+  if (phase === "empty" && ws.message === "NOT_FOUND" && !$("target-query").value.trim())
+    $("interaction-message").textContent = "";
+  if (phase === "empty")
+    $("target-stage").textContent = ws.candidates?.length
+      ? "Choose result"
+      : "Ready";
+  const manualReady = ws.mode !== "robot_control" ||
+    (control.connected && control.armed && !control.gesture_active);
+  const destinationReady = !!ws.destination && ws.can_go && manualReady;
+  if (phase === "confirmed") {
+    $("target-stage").textContent = destinationReady
+      ? "Confirmed" : ws.mode === "observe" ? "Observe" : "Refresh required";
+    $("go-note").textContent = control.failed
+      ? "Connection failed. Reconnect before GO."
+      : ws.mode === "observe"
+        ? "Observe has no movement authorization."
+        : !ws.destination
+          ? "Authorization cleared. Refresh before GO."
+          : !ws.can_go
+            ? ws.selected?.age_s > 1.5
+              ? "Evidence stale. Refresh before GO."
+              : "Preview expired. Refresh before GO."
+            : control.demo
+              ? "Moves the virtual robot."
+              : ws.mode === "dry_run"
+                ? "Records the exact SE2 command. No motion."
+                : "Single-use movement authorization.";
+  }
+  if (phase === "candidate") $("target-stage").textContent = "Candidate";
+  document.querySelector(".destination .section-heading h2").textContent =
+    destinationReady ? "Destination ready" : "Review destination";
+  if (
+    ws.mode === "robot_control" &&
+    (!control.connected || !control.armed || control.gesture_active)
+  ) {
+    $("go-button").disabled = true;
+    $("target-stage").textContent = "Readiness required";
+    $("go-note").textContent = control.failed
+      ? "Connection failed. Reconnect before GO."
+      : "Power and confirm standing state before GO.";
+  }
+  $("live-world-title").textContent = ws.destination
+    ? "Destination / top view"
+    : "World / top view";
+  scheduleInspectorOverflow();
+}
+for (const button of document.querySelectorAll("[data-live-view]"))
+  button.addEventListener("click", () => setLiveView(button.dataset.liveView));
+$("fixture-toggle").addEventListener("click", () => {
+  reviewFixture = !reviewFixture;
+  updateWorkstation(workspaceState, state);
+});
+$("camera-select").addEventListener("change", () => {
+  if (workspaceState) updateWorkstation(workspaceState, state);
+});
+$("review-route").addEventListener("click", () => setLiveView("world"));
+$("live-inspector-toggle").addEventListener("click", () => {
+  const closed = $("live-layout").dataset.inspector === "closed";
+  $("live-layout").dataset.inspector = closed ? "open" : "closed";
+  $("live-inspector-toggle").setAttribute("aria-expanded", String(closed));
+});
+function showDrawer(id) {
+  clearMovement();
+  if (["manual-drawer", "diagnostic-drawer"].includes(id)) $(id).show();
+  else $(id).showModal();
+}
+for (const id of ["manual-tool", "inspector-manual"])
+  $(id).addEventListener("click", () => showDrawer("manual-drawer"));
+$("close-manual").addEventListener("click", () => {
+  clearMovement();
+  $("manual-drawer").close();
+});
+$("manual-drawer").addEventListener("cancel", clearMovement);
+for (const id of [
+  "diagnostic-tool",
+  "footer-diagnostics",
+  "world-diagnostics",
+  "debug-diagnostics",
+])
+  $(id).addEventListener("click", () => {
+    showDrawer("diagnostic-drawer");
+    if (workspaceState) updateWorkspace(workspaceState, state);
+  });
+$("close-diagnostics").addEventListener("click", () =>
+  $("diagnostic-drawer").close(),
+);
+$("diagnostic-drawer").addEventListener("cancel", clearMovement);
+$("connection-tool").addEventListener("click", () =>
+  showDrawer("connection-menu"),
+);
+$("connection-status").addEventListener("click", () =>
+  showDrawer("connection-menu"),
+);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  for (const id of ["manual-drawer", "diagnostic-drawer"]) {
+    if ($(id).open) {
+      clearMovement();
+      $(id).close();
+    }
+  }
+});
+$("close-connection-menu").addEventListener("click", () =>
+  $("connection-menu").close(),
+);
+for (const id of ["demo-button", "connect-button"])
+  $(id).addEventListener("click", () => $("connection-menu").close());
+$("live-3d").addEventListener("click", openAdvanced3D);
+$("live-fit").addEventListener("click", () => {
+  mapSignature = "";
+  if (workspaceState) drawMap($("route-map"), workspaceState);
+});
+for (const [id, delta] of [
+  ["map-zoom-in", 0.25],
+  ["map-zoom-out", -0.25],
+  ["map-fit", 0],
+])
+  $(id).addEventListener("click", () => {
+    worldZoom = delta ? Math.max(0.5, Math.min(3, worldZoom + delta)) : 1;
+    mapSignature = "";
+    if (workspaceState) drawMap($("main-map"), workspaceState, true);
+  });
+let resizeQueued = false;
+let inspectorOverflowQueued = false;
+function scheduleInspectorOverflow() {
+  if (inspectorOverflowQueued) return;
+  inspectorOverflowQueued = true;
+  requestAnimationFrame(() => {
+    inspectorOverflowQueued = false;
+    const body = document.querySelector(".target-body");
+    $("inspector-overflow").hidden = body.scrollHeight <= body.clientHeight + body.scrollTop + 8;
+  });
+}
+const inspectorBody = document.querySelector(".target-body");
+new ResizeObserver(scheduleInspectorOverflow).observe(inspectorBody);
+inspectorBody.addEventListener("scroll", scheduleInspectorOverflow, { passive: true });
+inspectorBody.addEventListener("toggle", scheduleInspectorOverflow, true);
+const mapResize = new ResizeObserver(() => {
+  if (resizeQueued) return;
+  resizeQueued = true;
+  requestAnimationFrame(() => {
+    resizeQueued = false;
+    if (workspaceState) {
+      drawMap($("route-map"), workspaceState);
+      drawMap($("main-map"), workspaceState, true);
+    }
+  });
+});
+mapResize.observe($("route-map"));
+mapResize.observe($("main-map"));
+
+// Inspector resizing changes only screen layout, never world coordinates.
+let inspectorWidth =
+  parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue("--inspector"),
+  ) || 306;
+function resizeInspector(width) {
+  inspectorWidth = Math.max(240, Math.min(460, innerWidth * 0.4, width));
+  document.documentElement.style.setProperty(
+    "--inspector",
+    `${inspectorWidth}px`,
+  );
+  for (const handle of document.querySelectorAll(".inspector-resizer"))
+    handle.setAttribute("aria-valuenow", String(Math.round(inspectorWidth)));
+}
+for (const panel of document.querySelectorAll(
+  ".target-column, .entity-inspector",
+)) {
+  const handle = document.createElement("div");
+  handle.className = "inspector-resizer";
+  handle.tabIndex = 0;
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+  handle.setAttribute("aria-label", "Resize inspector width");
+  handle.setAttribute("aria-valuemin", "240");
+  handle.setAttribute("aria-valuemax", "460");
+  handle.setAttribute("aria-valuenow", String(inspectorWidth));
+  panel.prepend(handle);
+  let startX = null,
+    startWidth = null;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    clearMovement();
+    startX = event.clientX;
+    startWidth = panel.clientWidth;
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (startX !== null) resizeInspector(startWidth + startX - event.clientX);
+  });
+  for (const name of ["pointerup", "pointercancel", "lostpointercapture"])
+    handle.addEventListener(name, () => {
+      startX = null;
+    });
+  handle.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    clearMovement();
+    resizeInspector(
+      event.key === "Home"
+        ? 306
+        : panel.clientWidth + (event.key === "ArrowLeft" ? 16 : -16),
+    );
+  });
+}
+$("world-inspector-toggle").addEventListener("click", () => {
+  const layout = document.querySelector(".map-workspace");
+  const closed = layout.dataset.inspector === "closed";
+  layout.dataset.inspector = closed ? "open" : "closed";
+  $("world-inspector-toggle").setAttribute("aria-expanded", String(closed));
+});
+
+// Modal setup dialogs retain an immediately reachable Stop inside the top layer.
+for (const dialog of document.querySelectorAll(
+  "dialog:not(.manual-drawer):not(.diagnostic-drawer)",
+)) {
+  const stop = document.createElement("button");
+  stop.type = "button";
+  stop.className = "dialog-stop";
+  stop.textContent = "STOP MOVEMENT";
+  stop.addEventListener("click", () => $("stop-button").click());
+  dialog.querySelector(".dialog-head").append(stop);
+}
+async function openAdvanced3D() {
+  showDrawer("rerun-dialog");
+  let list = $("recording-options");
+  if (!list) {
+    list = document.createElement("div");
+    list.id = "recording-options";
+    $("rerun-dialog").querySelector(".dialog-head").after(list);
+  }
+  const loading = document.createElement("p");
+  loading.textContent = "Loading local recordings…";
+  list.replaceChildren(loading);
+  try {
+    const entries = (await api("/api/runs")).artifacts
+      .filter((item) => item.name.endsWith(".rrd"))
+      .slice(0, 12);
+    list.replaceChildren();
+    if (!entries.length) {
+      const note = document.createElement("p");
+      note.textContent =
+        "No recorded 3D found. Record or replay using the commands below.";
+      list.append(note);
+    }
+    for (const item of entries) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "recording-option";
+      const name = document.createElement("strong"),
+        run = document.createElement("span"),
+        arrow = document.createElement("span");
+      name.textContent = item.name;
+      run.textContent = item.run;
+      run.className = "recording-run";
+      arrow.textContent = "↗";
+      arrow.className = "recording-arrow";
+      button.append(name, run, arrow);
+      button.title = "Open actual recording in the native Rerun viewer";
+      button.addEventListener("click", async () => {
+        try {
+          toast((await api("/api/runs/open", { id: item.id })).message);
+          $("rerun-dialog").close();
+        } catch (error) {
+          toast(error.message);
+        }
+      });
+      list.append(button);
+    }
+  } catch (error) {
+    list.replaceChildren();
+    const note = document.createElement("p");
+    note.textContent = error.message;
+    list.append(note);
+  }
+}

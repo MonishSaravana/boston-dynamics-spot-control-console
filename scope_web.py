@@ -587,6 +587,8 @@ class Handler(BaseHTTPRequestHandler):
             template = (WEB / 'index.html').read_text()
             body = template.replace('__SCOPE_TOKEN__', self.app.token).encode()
             return self._send(200, 'text/html; charset=utf-8', body)
+        if path == '/fixtures/lab-review.png':
+            return self._send(200, 'image/png', (WEB / 'fixtures/lab-review.png').read_bytes())
         if path == '/favicon.ico':
             return self._send(204, 'image/x-icon', b'')
         if path == '/favicon.svg':

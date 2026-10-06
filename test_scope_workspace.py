@@ -6,13 +6,14 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from scope.live_interaction import DryRunExecutor, RobotPose
-from scope.workspace import GuardedDispatch, RunLibrary
+from scope.workspace import GuardedDispatch, RunLibrary, Workspace
 from scope_web import WebControl, make_server
 
 
@@ -54,6 +55,19 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.workspace.snapshot()['selected']['source'], 'DIRECT')
         self.action('reject')
         self.assertIsNone(self.workspace.snapshot()['selected'])
+
+    def test_source_processing_change_clears_target_approval(self):
+        self.target()
+        interaction = self.workspace.interaction
+        source = Mock()
+        workspace = SimpleNamespace(epoch=0, revision=0, navigation_controller=None,
+            backend=SimpleNamespace(mode='SPOT_SENSORS_DRY_RUN', source=source),
+            interaction=interaction, control=SimpleNamespace(session=None))
+        Workspace._action(workspace, 'camera', {'source': 'front', 'process': False}, 0)
+        source.configure.assert_called_once_with('front', acquire=None,
+            process=False, display=None, max_hz=None)
+        self.assertIsNone(interaction.confirmed)
+        self.assertIsNone(interaction.proposal)
 
     def test_observe_and_demo_cannot_enable_robot_control(self):
         self.action('mode', mode='observe')

@@ -186,7 +186,7 @@ function updateState(next) {
   buildSplit(displayCameras);
   setView();
 
-  $("mode-pill").textContent = next.demo ? "OFFLINE DEMO" : "LOCAL CONSOLE";
+  $("mode-pill").textContent = next.demo ? "Demo data" : "No robot";
   $("mode-pill").classList.toggle("demo", next.demo);
   $("state-dot").className =
     "state-dot" + (next.failed ? " error" : next.armed ? " ready" : "");
@@ -206,12 +206,12 @@ function updateState(next) {
       ? "Spot sensors connected · command authority absent"
       : next.status;
   $("connect-button").textContent = next.demo
-    ? "Leave demo to connect"
+    ? "Connect to Spot"
     : next.connected || (ws?.available && !next.demo)
       ? "Disconnect"
       : "Connect to Spot";
   $("connect-button").disabled = next.demo;
-  $("demo-button").textContent = next.demo ? "Leave demo" : "Try offline demo";
+  $("demo-button").textContent = next.demo ? "Leave demo" : "Demo data";
   $("demo-button").disabled = next.connected || (ws?.available && !next.demo);
   $("drive-state").textContent = next.armed ? "READY" : "LOCKED";
   $("drive-state").classList.toggle("ready", next.armed);
@@ -344,7 +344,16 @@ function canDrive() {
     !state.gesture_active &&
     !document.hidden &&
     !$("connect-dialog").open &&
-    !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName)
+    ![
+      "settings-dialog",
+      "diagnostic-drawer",
+      "connection-menu",
+      "rerun-dialog",
+    ].some((id) => $(id).open) &&
+    !["INPUT", "SELECT", "TEXTAREA"].includes(
+      document.activeElement?.tagName,
+    ) &&
+    !document.activeElement?.closest(".inspector-resizer")
   );
 }
 

@@ -420,7 +420,8 @@ class Workspace:
             if b.mode == 'SIMULATED':
                 raise ValueError('Synthetic camera policy is fixed')
             b.source.configure(data.get('source'), acquire=data.get('acquire'),
-                               display=data.get('display'), max_hz=data.get('max_hz'))
+                               process=data.get('process'), display=data.get('display'),
+                               max_hz=data.get('max_hz'))
             session.invalidate('Camera settings changed; inspect fresh evidence')
             if self.control.session and self.control.gesture_active:
                 self.control.stop()
