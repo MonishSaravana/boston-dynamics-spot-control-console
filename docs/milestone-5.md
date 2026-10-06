@@ -2,7 +2,7 @@
 
 Status: **READY FOR PHYSICAL VALIDATION**. The implementation and tests in this branch prepare the target-selection and dry-run path. No Spot was connected for this milestone in this workspace. Camera compatibility, depth registration, live latency, destination quality, and supervised movement have not been measured on the physical robot. Do not call M5 complete until those checks pass.
 
-The new interaction console is separate from the existing manual-control and browser consoles. The simulator uses SCOPE's synthetic room geometry and a virtual robot. In Spot mode, the default connection reads images and robot state without a lease. Its GO button records a `WOULD_EXECUTE_NO_MOTION` proposal in memory and the process log. A separately opt-in supervised mode is prepared for the final Monday gate; it was exercised only with a fake command client.
+The primary local browser now combines manual controls and this interaction workflow through shared adapters. The original Qt consoles remain available; see [the unified console guide](unified-console.md). The simulator uses SCOPE's synthetic room geometry and a virtual robot. In Spot mode, the default connection reads images and robot state without a lease. Its GO button records a `WOULD_EXECUTE_NO_MOTION` proposal in memory and the process log. A separately opt-in supervised mode is prepared for the final Monday gate; it was exercised only with a fake command client.
 
 ## What is implemented
 

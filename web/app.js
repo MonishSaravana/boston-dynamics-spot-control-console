@@ -1,6 +1,7 @@
 const token = document.querySelector('meta[name="scope-token"]').content;
 const $ = (id) => document.getElementById(id);
 const names = {
+  evidence: "Perception evidence",
   frontleft_fisheye_image: "Front left",
   frontright_fisheye_image: "Front right",
   left_fisheye_image: "Left",
@@ -29,6 +30,7 @@ async function api(path, data) {
     },
     body: data === undefined ? undefined : JSON.stringify(data),
     cache: "no-store",
+    keepalive: data?.name === "stop",
   });
   const result = await response.json();
   if (!response.ok)
@@ -58,13 +60,22 @@ async function command(name, extra = {}) {
 async function loadImage(name, element) {
   try {
     const response = await fetch(
-      name === "model" ? "/api/model" : `/api/frame/${name}`,
+      name === "model"
+        ? "/api/model"
+        : name === "evidence" ||
+            (state?.workspace?.available && !state?.demo && name !== "panorama")
+          ? `/api/workspace/image/${name}`
+          : `/api/frame/${name}`,
       {
         headers: { "X-SCOPE-Token": token },
         cache: "no-store",
       },
     );
-    if (!response.ok) return;
+    if (!response.ok) {
+      element.hidden = true;
+      if (element === $("camera-image")) $("camera-empty").hidden = false;
+      return;
+    }
     const url = URL.createObjectURL(await response.blob());
     const old = objectUrls.get(element);
     element.src = url;
@@ -90,7 +101,11 @@ function setView() {
     previousView = view;
     if (
       view !== "split" &&
-      (view === "panorama" ? state?.has_panorama : state?.frame_versions[view])
+      (view === "evidence"
+        ? state?.workspace?.available
+        : view === "panorama"
+          ? state?.has_panorama
+          : state?.frame_versions[view])
     )
       loadImage(view, $("camera-image"));
   }
@@ -132,25 +147,43 @@ function clearImages() {
 function updateState(next) {
   if (
     state &&
-    (state.demo !== next.demo || (state.connected && !next.connected))
+    (state.demo !== next.demo ||
+      (state.connected && !next.connected) ||
+      (state.workspace?.available && !next.workspace?.available))
   )
     clearImages();
   state = next;
-  const available = [...next.cameras];
-  if (next.cameras.length > 1) available.push("split");
+  const ws = next.workspace;
+  const displayCameras =
+    ws?.available && !next.demo
+      ? Object.entries(ws.cameras || {})
+          .filter(([_, camera]) => camera.displayed && camera.acquired)
+          .map(([name]) => name)
+      : next.cameras;
+  const available = [...displayCameras];
+  if (ws?.available) available.unshift("evidence");
+  if (displayCameras.length > 1) available.push("split");
   if (
     next.cameras.includes("frontleft_fisheye_image") &&
     next.cameras.includes("frontright_fisheye_image")
   )
     available.push("panorama");
   const select = $("camera-select");
+  for (const camera of displayCameras) {
+    if (![...select.options].some((option) => option.value === camera)) {
+      const option = document.createElement("option");
+      option.value = camera;
+      option.textContent = names[camera] || camera;
+      select.append(option);
+    }
+  }
   for (const option of select.options)
     option.disabled = !available.includes(option.value);
   if (available.length && !available.includes(select.value))
     select.value = available[0];
   if (!available.length) select.value = "frontleft_fisheye_image";
   select.disabled = !available.length;
-  buildSplit(next.cameras);
+  buildSplit(displayCameras);
   setView();
 
   $("mode-pill").textContent = next.demo ? "OFFLINE DEMO" : "LOCAL CONSOLE";
@@ -165,16 +198,21 @@ function updateState(next) {
         ? "Standing confirmed · movement ready"
         : next.connected
           ? "Connected · movement locked"
-          : "No robot connected";
-  $("connection-message").textContent = next.status;
+          : ws?.available
+            ? "Spot sensors connected · no manual commands"
+            : "No robot connected";
+  $("connection-message").textContent =
+    ws?.available && !next.demo && !next.connected
+      ? "Spot sensors connected · command authority absent"
+      : next.status;
   $("connect-button").textContent = next.demo
     ? "Leave demo to connect"
-    : next.connected
+    : next.connected || (ws?.available && !next.demo)
       ? "Disconnect"
       : "Connect to Spot";
   $("connect-button").disabled = next.demo;
   $("demo-button").textContent = next.demo ? "Leave demo" : "Try offline demo";
-  $("demo-button").disabled = next.connected;
+  $("demo-button").disabled = next.connected || (ws?.available && !next.demo);
   $("drive-state").textContent = next.armed ? "READY" : "LOCKED";
   $("drive-state").classList.toggle("ready", next.armed);
   $("power-button").disabled =
@@ -236,7 +274,13 @@ function updateState(next) {
     button.disabled = !next.armed || next.failed || next.gesture_active;
 
   const view = select.value;
-  if (view === "split") {
+  if (
+    ws?.available &&
+    (view === "evidence" || (!next.demo && displayCameras.includes(view)))
+  ) {
+    if (previousVersions.workspace !== ws.version)
+      loadImage(view, $("camera-image"));
+  } else if (view === "split") {
     for (const image of document.querySelectorAll(".split-tile img")) {
       const camera = image.dataset.camera;
       if (previousVersions[camera] !== next.frame_versions[camera])
@@ -257,12 +301,14 @@ function updateState(next) {
   previousVersions = {
     ...next.frame_versions,
     panorama: next.panorama_version,
+    workspace: ws?.version,
   };
   if (previousModelVersion !== next.model_version) {
     previousModelVersion = next.model_version;
     loadImage("model", $("model-image"));
   }
   if ((!next.armed || next.failed) && held.size) clearMovement();
+  if (typeof updateWorkspace === "function") updateWorkspace(ws, next);
 }
 
 async function refresh() {
@@ -289,6 +335,11 @@ function keyName(event) {
 function canDrive() {
   return (
     state?.armed &&
+    (!state.workspace?.available ||
+      (state.workspace.mode === "robot_control" &&
+        !state.workspace.navigation_active)) &&
+    (!location.hash ||
+      ["#operate", "#manual-controls"].includes(location.hash)) &&
     !state.failed &&
     !state.gesture_active &&
     !document.hidden &&
@@ -323,7 +374,12 @@ async function sendDrive(released = false) {
 }
 
 function clearMovement() {
-  if (!held.size && !state?.gesture_active && !$("gesture-toggle").checked)
+  if (
+    !held.size &&
+    !state?.gesture_active &&
+    !state?.workspace?.navigation_active &&
+    !$("gesture-toggle").checked
+  )
     return;
   held.clear();
   paintHeld();
@@ -444,8 +500,8 @@ $("demo-button").addEventListener("click", async () => {
 });
 $("connect-button").addEventListener("click", async () => {
   clearMovement();
-  if (state?.connected) {
-    if (confirm("Disconnect from Spot and stop movement?")) {
+  if (state?.connected || (state?.workspace?.available && !state?.demo)) {
+    {
       try {
         await api("/api/disconnect", {});
         await refresh();
@@ -453,7 +509,11 @@ $("connect-button").addEventListener("click", async () => {
         toast(error.message);
       }
     }
-  } else dialog.showModal();
+  } else {
+    $("connect-mode").value = state?.workspace?.mode || "observe";
+    $("authority-row").hidden = $("connect-mode").value !== "robot_control";
+    dialog.showModal();
+  }
 });
 $("close-dialog").addEventListener("click", () => dialog.close());
 $("cancel-connect").addEventListener("click", () => dialog.close());
@@ -462,10 +522,15 @@ $("connect-form").addEventListener("submit", async (event) => {
   const errorLabel = $("connect-error");
   errorLabel.hidden = true;
   try {
-    await api("/api/connect", {
+    $("connect-submit").disabled = true;
+    $("connect-submit").textContent = "Connecting…";
+    await api("/api/workspace/connect", {
       hostname: $("robot-host").value.trim(),
       username: $("robot-user").value.trim(),
       password: $("robot-password").value,
+      mode: $("connect-mode").value,
+      human_pose: $("connect-humans").checked,
+      command_authority: $("command-authority").checked,
     });
     $("robot-password").value = "";
     dialog.close();
@@ -473,6 +538,10 @@ $("connect-form").addEventListener("submit", async (event) => {
   } catch (error) {
     errorLabel.textContent = error.message;
     errorLabel.hidden = false;
+  } finally {
+    $("connect-submit").disabled = false;
+    $("connect-submit").textContent = "Connect";
+    $("robot-password").value = "";
   }
 });
 

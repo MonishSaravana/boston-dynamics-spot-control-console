@@ -217,6 +217,10 @@ class SpotNormalizationTests(unittest.TestCase):
                 return [response]
         source = SpotReadOnlySource(Client())
         source.configure("good", display=False, max_hz=2.)
+        with self.assertRaises(ValueError):
+            source.configure("good", acquire=False, max_hz=float('nan'))
+        self.assertTrue(source.policy['good'].acquire)
+        self.assertEqual(source.policy['good'].max_hz, 2.)
         source.poll()
         self.assertEqual(source.health["good"], "OK")
         self.assertEqual(source.health["broken"], "FAILED")

@@ -1,8 +1,10 @@
 # Boston Dynamics Spot Control Console (SCOPE)
 
-**SCOPE** stands for **Spot Control, Observation, and Preview Environment**. The desktop and local browser consoles display Spot's built-in fisheye cameras and request power, stand, movement, and standing-posture commands through the Spot SDK. The browser console runs on the operator's laptop at `127.0.0.1`; it has an offline demo and a launcher that updates one managed installation from GitHub before starting. The browser control path has not been tested on a live robot. Offline commands reconstruct supplied-pose RGB-D scenes, fuse semantic entities, keep persistent world memory, and estimate human geometry and uncertain pointing in the same coordinate frame. Local object queries accept ordinary phrases, refine supported regions into masks, and track them between detector refreshes. A new interaction console demonstrates query or pointing → target confirmation → destination preview → GO with a virtual robot; its default Spot mode uses read-only sensors and dry-run GO. No M5 path has been tested on a physical Spot. On six held-out public rooms, the default query localized 16 of 25 annotated targets and accepted 6 of 119 annotation-level negatives.
+**SCOPE** (Spot Control, Observation, and Preview Environment) is an independent local Spot console. The primary browser app brings cameras, manual controls, target selection, destination preview and explicit GO into **Operate**, with **Maps**, **Runs** and **Evaluate** for inspection and existing offline tools. It shares the existing Qt console's perception and target adapters. Advanced point clouds, human skeletons, pointing rays, memory and timelines remain in Rerun.
 
-The front panorama is an approximate stitch of two cameras. The robot mesh displays fresh measured joint positions when available; the posture controls show requested offsets. SCOPE is an independent project, not an official or endorsed Boston Dynamics product.
+The offline demo runs a synthetic room and virtual robot without connecting to Spot. Observe uses read-only Spot sensors; Dry run records the proposed destination without sending a movement command. Robot control requires an explicitly authorized connection and the separate class E-stop. The browser command path and M5 target-to-GO workflow have not been validated on a physical robot. **M5 remains READY FOR PHYSICAL VALIDATION** on `codex/m5-live-spot-interaction`.
+
+The front panorama is an approximate stitch. Model geometry uses measured joints when fresh telemetry is available; posture sliders specify requested offsets. Synthetic images are fixtures, not Spot captures. SCOPE is not an official or endorsed Boston Dynamics product. See [the unified console guide](docs/unified-console.md) for workflows, preserved tools and verification limits.
 
 ## Contents
 
@@ -24,7 +26,19 @@ The front panorama is an approximate stitch of two cameras. The robot mesh displ
 
 ## Install
 
-### Local browser console on macOS
+### Primary app from this checkout
+
+Use Python 3.11–3.14. In this workspace, `.venv` already contains the required dependencies. For a fresh checkout:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-console.txt
+.venv/bin/python scope_web.py --demo
+```
+
+The unified browser now uses the existing mapping dependencies listed in `requirements-console.txt`. Optional query, human-pose and gesture model bundles remain separate; see their sections below. This setup guidance has not been checked as a fresh installation on other platforms.
+
+### Managed browser launcher on macOS
 
 From [GitHub](https://github.com/MonishSaravana/boston-dynamics-spot-control-console), choose **Code → Download ZIP**, extract it, and run `Open SCOPE.command` from the extracted folder. For a first run from Terminal, use:
 
@@ -66,7 +80,7 @@ The rest of the GUI runs without them; gesture mode cannot start if they are mis
 
 ## Target interaction preview
 
-The M5 console is on the `codex/m5-live-spot-interaction` development branch while physical validation is pending. Run the synthetic room and virtual GO loop without a robot:
+The primary browser exposes this same workflow; start it with `.venv/bin/python scope_web.py --demo`. The original Qt M5 console remains available on `codex/m5-live-spot-interaction` while physical validation is pending:
 
 ```sh
 .venv/bin/python -m scope.m5_console --demo
@@ -90,23 +104,35 @@ Camera acquisition and query overlays can run without depth. Mapping and destina
 
 ## Local browser console
 
-From this workspace, preview the browser interface without a robot:
+From this checkout, launch the primary app without a robot:
 
 ```sh
 .venv/bin/python scope_web.py --demo
 ```
 
-The console opens at a local `http://127.0.0.1` address. Demo mode makes no robot client, authentication, lease, network request to Spot, or robot command. Its grayscale scenes are generated test artwork, not Spot camera captures. Power, Stand, movement, posture Apply, and gesture mode are disabled. If the separate SDK base URDF ZIP is present, the model shows its simulated zero configuration; otherwise it reports that the mesh is unavailable.
+The server opens a local `http://127.0.0.1` address. For a fixed port or an additional artifact directory:
 
-For the live connection screen, run:
+```sh
+.venv/bin/python scope_web.py --demo --port 8766 --runs-dir runs --runs-dir /path/to/other/runs
+```
+
+In **Operate**, type `chair`, select a candidate, confirm it, inspect destination coordinates, heading, standoff and route, then press **GO · virtual**. Simulate pointing and **Maps → select entity → Use as target** enter the same workflow. GO consumes its preview; another GO requires a fresh preview. Camera evidence and map geometry in demo mode are synthetic fixtures. Power, Stand, manual drive, posture Apply and physical gestures stay disabled. The optional SDK mesh is labeled simulated.
+
+**Maps** shows current occupancy, entities, robot pose and destination. **Advanced 3D / Rerun** gives the existing viewer workflow. **Runs** indexes the latest 500 local map, memory, result and recording artifacts in configured directories, supports read-only inspection, and opens `.rrd` recordings in Rerun. **Evaluate** provides copyable existing benchmark commands, current module health and the original consoles/CLIs.
+
+For the live connection form:
 
 ```sh
 .venv/bin/python scope_web.py
 ```
 
-Enter Spot's confirmed address and credentials in the local page after starting the separate class E-stop. The password is used for that connection and is not saved. The server listens on the laptop's loopback address only; another laptop cannot open it. The browser offers the same 0.05–0.35 m/s speed request range and standing-posture request limits as the desktop console. Hold W/A/S/D, arrow keys, or a direction button to drive after fresh standing state is confirmed. Key release requests zero velocity. A lost browser heartbeat clears held input after 0.30 seconds; the SDK movement command itself expires after 0.35 seconds. Focus loss, tab hiding, Stop, connection failure, and shutdown also request zero velocity. The browser path has only been checked offline; live robot behavior remains unverified.
+Observe is the default: authenticate read-only sensors without taking a command lease. Dry run uses the same target/destination pipeline and records the exact SE2 destination, with no movement command. Robot control requires selecting that mode in the connection form and explicitly granting command authority after starting the class E-stop. Manual controls and supervised GO share the existing command session and lease. Returning to Observe or Dry run stops movement but retains an existing command connection until **Disconnect** returns its lease; reconnect in Observe for a sensor-only session.
 
-The browser's **STOP MOVEMENT** button is a zero-velocity request, not the class E-stop. Keep the class E-stop available as directed by your instructor. The SDK's [GUI E-stop example](https://dev.bostondynamics.com/python/examples/estop/readme) is a separate option if the class procedure allows it. This repository does not redistribute that SDK example.
+Camera settings independently control acquisition, display and rate (above 0 through 30 Hz) for each source. One selected visual/depth pair feeds perception. Mapping and destination preview require physically verified alignment, calibration, timestamps and odom transforms. The alignment checkbox records the operator's verification; it does not establish calibration. Optional human pose must be enabled when connecting. No speculative multi-camera Spot fusion is added.
+
+After fresh standing readiness, hold W/A/S/D, arrows or a direction button to drive at the requested 0.05–0.35 m/s limit. Release requests zero velocity. Manual commands expire after 0.35 s; the browser presence timeout is 0.30 s. Existing supervised trajectory commands expire after 0.75 s and recheck robot/route state while executing. Stop, focus loss, a hidden tab, connection failure and shutdown clear movement authority. Manual motion, posture and gestures cannot run alongside active GO.
+
+Credentials are used for that connection and not saved. The server listens only on the laptop's loopback address. **STOP MOVEMENT** requests zero velocity and clears approval; it does not operate the separate class E-stop. Keep the class E-stop available. See [the physical M5 checklist](docs/milestone-5.md) before any supervised test. No live robot was used for this interface pass.
 
 ## Run with the class E-stop
 
@@ -135,6 +161,8 @@ python spot_control_gui.py --hostname 192.168.80.3
 In the E-stop Terminal, **Space** triggers the E-stop, **r** releases it, and **q** quits. Follow your instructor's operating procedure. The GUI's **STOP MOVEMENT** button requests zero velocity; it does not operate the class E-stop.
 
 ## Controls and views
+
+The following dock/layout instructions describe the retained Qt manual console. The browser provides the same manual requests beneath Operate and uses its four-page shell.
 
 ### Cameras and panorama
 

@@ -2,332 +2,643 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="scope-token" content="__SCOPE_TOKEN__" />
-    <title>SCOPE | Spot control console</title>
+    <meta
+      name="description"
+      content="Local SCOPE camera, mapping and supervised Spot control console."
+    />
+    <meta name="color-scheme" content="dark" />
+    <title>SCOPE | Local robot console</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/style.css" />
     <script src="/app.js" defer></script>
+    <script src="/workspace.js" defer></script>
   </head>
   <body>
+    <noscript
+      >SCOPE requires JavaScript for local state and control. Use the existing
+      Python consoles if JavaScript is unavailable.</noscript
+    >
     <div class="shell">
       <header class="topbar">
-        <div class="brand" aria-label="SCOPE">
-          <div class="brand-mark">
-            <span></span><span></span><span></span><span></span>
-          </div>
-          <div><strong>SCOPE</strong><small>Spot control console</small></div>
-        </div>
-        <div class="header-state" role="status" aria-live="polite">
-          <span id="mode-pill" class="mode-pill">LOCAL</span>
-          <span id="state-dot" class="state-dot"></span>
-          <span id="state-title">Loading console…</span>
-        </div>
-        <button
-          id="stop-button"
-          class="stop-button"
-          type="button"
-          title="Request zero velocity and clear held input. The class E-stop is separate."
+        <a class="brand" href="#operate" aria-label="SCOPE Operate"
+          ><svg viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="12" />
+            <path d="M16 2v5M30 16h-5M16 30v-5M2 16h5" /></svg
+          ><strong>SCOPE</strong></a
         >
-          <span class="stop-icon" aria-hidden="true"></span> STOP MOVEMENT
-        </button>
-      </header>
-
-      <div class="connection-strip">
-        <div>
-          <span class="eyebrow">CONNECTION</span>
-          <p id="connection-message">Loading local console…</p>
+        <nav aria-label="Workspace">
+          <a href="#operate" aria-current="page">Operate</a
+          ><a href="#runs">Runs</a><a href="#maps">Maps</a
+          ><a href="#evaluate">Evaluate</a>
+        </nav>
+        <div class="header-state" role="status">
+          <span id="state-dot" class="state-dot"></span
+          ><span id="mode-pill">LOCAL</span
+          ><span id="state-title" class="sr-only">Loading console</span>
         </div>
+        <div class="stop-wrap">
+          <button
+            id="stop-button"
+            class="stop-button"
+            type="button"
+            title="Request zero velocity and clear authorization. The class E-stop is separate."
+          >
+            <span class="stop-icon" aria-hidden="true"></span>STOP MOVEMENT</button
+          ><small>Zero-velocity request · class E-stop separate</small>
+        </div>
+      </header>
+      <div class="connection-strip">
+        <p id="connection-message">Loading local console…</p>
         <div class="connection-actions">
           <button id="demo-button" class="text-button" type="button">
             Try offline demo</button
-          ><button
-            id="connect-button"
-            class="button button-outline"
-            type="button"
-          >
-            Connect to Spot
-          </button>
+          ><button id="connect-button" type="button">Connect to Spot</button>
         </div>
       </div>
-
-      <main class="dashboard">
-        <section class="visual-column" aria-label="Camera and robot model">
-          <article class="card camera-card">
-            <div class="card-head">
-              <div>
-                <span class="eyebrow">OBSERVE</span>
-                <h1>Built-in cameras</h1>
-              </div>
-              <div class="head-actions">
-                <label class="select-label" for="camera-select">View</label>
-                <select id="camera-select" aria-label="Camera view">
-                  <option value="frontleft_fisheye_image">Front left</option>
-                  <option value="frontright_fisheye_image">Front right</option>
-                  <option value="left_fisheye_image">Left</option>
-                  <option value="right_fisheye_image">Right</option>
-                  <option value="back_fisheye_image">Back</option>
-                  <option value="split">All cameras</option>
-                  <option value="panorama">Front panorama</option>
-                </select>
+      <main>
+        <section
+          id="page-operate"
+          class="page operate-page"
+          aria-label="Operate"
+        >
+          <div class="workspace-head">
+            <div>
+              <h1>Operate</h1>
+              <p id="mode-description">
+                Sensors and target evidence. Movement requires separate
+                authorization.
+              </p>
+            </div>
+            <div class="mode-control">
+              <a href="#manual-controls">Manual controls ↓</a
+              ><label for="control-mode">Control mode</label
+              ><select id="control-mode">
+                <option value="observe">Observe</option>
+                <option value="dry_run">Dry run</option>
+                <option value="robot_control">Robot control</option>
+              </select>
+            </div>
+          </div>
+          <div class="operate-grid">
+            <div class="visual-column">
+              <section class="camera-card panel" aria-label="Camera evidence">
+                <div class="panel-head">
+                  <h2>Camera evidence</h2>
+                  <div class="head-actions">
+                    <label class="sr-only" for="camera-select"
+                      >Camera view</label
+                    ><select id="camera-select">
+                      <option value="evidence">Evidence</option>
+                      <option value="frontleft_fisheye_image">
+                        Front left
+                      </option>
+                      <option value="frontright_fisheye_image">
+                        Front right
+                      </option>
+                      <option value="left_fisheye_image">Left</option>
+                      <option value="right_fisheye_image">Right</option>
+                      <option value="back_fisheye_image">Back</option>
+                      <option value="split">All cameras</option>
+                      <option value="panorama">Front panorama</option></select
+                    ><button
+                      id="settings-button"
+                      class="text-button"
+                      type="button"
+                      title="Camera and perception settings"
+                    >
+                      Settings
+                    </button>
+                  </div>
+                </div>
+                <div id="camera-single" class="camera-stage">
+                  <img
+                    id="camera-image"
+                    alt="Selected camera evidence"
+                    width="960"
+                    height="720"
+                    hidden
+                  />
+                  <div id="camera-empty" class="camera-empty">
+                    Connect sensors or start the offline demo
+                  </div>
+                  <span id="image-badge" class="image-badge">NO FEED</span>
+                  <div class="image-bottom">
+                    <strong id="image-title">Perception evidence</strong
+                    ><span id="image-meta">Waiting for image</span>
+                  </div>
+                </div>
+                <div id="camera-split" class="camera-split" hidden></div>
+                <div class="camera-foot">
+                  <p id="camera-caption">
+                    One selected visual/depth pair is processed.
+                  </p>
+                  <div id="panorama-tools" hidden>
+                    <label
+                      ><input id="auto-panorama" type="checkbox" checked /> Auto
+                      refresh</label
+                    ><button
+                      id="stitch-button"
+                      class="text-button"
+                      type="button"
+                    >
+                      Stitch once
+                    </button>
+                  </div>
+                </div>
+              </section>
+              <div class="spatial-preview panel">
+                <div class="panel-head">
+                  <h2>Destination &amp; route</h2>
+                  <a href="#maps"
+                    >Open Maps <span aria-hidden="true">↗</span></a
+                  >
+                </div>
+                <div class="preview-body">
+                  <svg
+                    id="route-map"
+                    class="world-map"
+                    viewBox="0 0 600 360"
+                    role="img"
+                    aria-label="Top-down map with robot, target and proposed route"
+                  ></svg>
+                  <div class="preview-legend">
+                    <span><i class="legend-robot"></i>Robot pose</span
+                    ><span><i class="legend-target"></i>Target</span
+                    ><span><i class="legend-route"></i>Destination</span>
+                    <p id="route-readout">
+                      World-frame poses.<br />Camera view does not limit travel
+                      direction.
+                    </p>
+                    <p id="route-scale">Scale unavailable</p>
+                  </div>
+                </div>
               </div>
             </div>
-            <div id="camera-single" class="camera-stage">
-              <img
-                id="camera-image"
-                alt="Selected built-in camera feed"
-                hidden
-              />
-              <div id="camera-empty" class="camera-empty">
-                Connect to see camera images
+            <aside class="target-column panel" aria-label="Target interaction">
+              <div class="panel-head">
+                <h2>Target interaction</h2>
+                <span id="target-stage" class="state-label">No target</span>
               </div>
-              <span id="image-badge" class="image-badge">SIMULATED</span>
-              <div class="image-bottom">
-                <strong id="image-title">Front left</strong
-                ><span id="image-meta">Waiting for image</span>
-              </div>
-            </div>
-            <div id="camera-split" class="camera-split" hidden></div>
-            <div class="camera-foot">
-              <p id="camera-caption">Camera feed status appears here.</p>
-              <div id="panorama-tools" class="panorama-tools" hidden>
-                <label
-                  ><input id="auto-panorama" type="checkbox" checked /> Auto
-                  refresh</label
+              <div class="target-body">
+                <details id="target-inputs" class="target-inputs" open>
+                  <summary>Change target</summary>
+                  <form id="query-form">
+                    <label for="target-query">Object query</label>
+                    <div class="query-row">
+                      <input
+                        id="target-query"
+                        type="text"
+                        placeholder="chair, gray sofa…"
+                        maxlength="160"
+                        autocomplete="off"
+                      /><button
+                        id="find-target"
+                        class="button-primary"
+                        type="submit"
+                      >
+                        Find target
+                      </button>
+                    </div>
+                  </form>
+                  <div class="point-row">
+                    <button id="point-button" type="button">Use pointing</button
+                    ><span id="point-note"
+                      >Enable human pose in connection settings</span
+                    >
+                  </div>
+                  <div
+                    id="candidate-list"
+                    class="candidate-list"
+                    aria-label="Target candidates"
+                  ></div>
+                </details>
+                <div class="target-evidence">
+                  <div class="target-title">
+                    <span class="target-marker" aria-hidden="true"></span>
+                    <h3 id="target-label">No target selected</h3>
+                  </div>
+                  <p id="target-explanation">
+                    Type an object, use pointing, or select a map entity.
+                  </p>
+                  <dl id="target-details" class="detail-list"></dl>
+                  <details id="evidence-detail">
+                    <summary>Target evidence</summary>
+                    <pre id="target-raw">No candidate evidence</pre>
+                  </details>
+                </div>
+                <div class="approval-actions">
+                  <button
+                    id="confirm-target"
+                    class="button-primary"
+                    type="button"
+                    disabled
+                  >
+                    CONFIRM TARGET</button
+                  ><button id="reject-target" type="button" disabled>
+                    Reject
+                  </button>
+                </div>
+                <div class="destination">
+                  <div class="section-heading">
+                    <h3>Destination preview</h3>
+                    <button
+                      id="preview-button"
+                      class="text-button"
+                      type="button"
+                      disabled
+                    >
+                      Preview again
+                    </button>
+                  </div>
+                  <p id="destination-empty">
+                    Confirm a target to propose a destination.
+                  </p>
+                  <dl id="destination-details" class="detail-list"></dl>
+                  <div class="go-row">
+                    <button
+                      id="go-button"
+                      class="button-primary"
+                      type="button"
+                      disabled
+                    >
+                      GO
+                    </button>
+                    <p id="go-note">Confirmation and GO are separate.</p>
+                  </div>
+                  <p class="route-link">
+                    <a href="#maps">Open Maps to review route</a>
+                  </p>
+                </div>
+                <p
+                  id="interaction-message"
+                  class="interaction-message"
+                  role="status"
+                  aria-live="polite"
                 >
-                <button id="stitch-button" class="text-button" type="button">
-                  Stitch once
+                  Select a target
+                </p>
+              </div>
+            </aside>
+          </div>
+          <div class="manual-grid">
+            <section id="manual-controls" class="panel manual-panel">
+              <div class="panel-head">
+                <h2>Manual controls</h2>
+                <span id="drive-state" class="state-label">LOCKED</span>
+              </div>
+              <div class="manual-body">
+                <div class="manual-drive">
+                  <div class="power-row">
+                    <button id="power-button" type="button">Power On</button
+                    ><button id="stand-button" type="button">Stand</button>
+                  </div>
+                  <div class="slider-head">
+                    <label for="speed">Speed limit</label
+                    ><output id="speed-value" for="speed">0.20 m/s</output>
+                  </div>
+                  <input
+                    id="speed"
+                    type="range"
+                    min="5"
+                    max="35"
+                    step="1"
+                    value="20"
+                  />
+                  <div class="range-labels">
+                    <span>0.05 m/s</span><span>0.35 m/s</span>
+                  </div>
+                  <p class="control-note">
+                    Hold W/A/S/D or arrows. Release requests zero velocity.
+                    Commands expire after 0.35 s.
+                  </p>
+                </div>
+                <div class="direction-pad" aria-label="Hold to move">
+                  <button
+                    type="button"
+                    data-direction="w"
+                    class="direction up"
+                    aria-label="Hold to move forward"
+                  >
+                    ↑</button
+                  ><button
+                    type="button"
+                    data-direction="a"
+                    class="direction left"
+                    aria-label="Hold to move left"
+                  >
+                    ←</button
+                  ><button
+                    type="button"
+                    data-direction="s"
+                    class="direction down"
+                    aria-label="Hold to move backward"
+                  >
+                    ↓</button
+                  ><button
+                    type="button"
+                    data-direction="d"
+                    class="direction right"
+                    aria-label="Hold to move right"
+                  >
+                    →
+                  </button>
+                  <div class="direction-center" aria-hidden="true">+</div>
+                </div>
+              </div>
+            </section>
+            <section class="panel posture-panel">
+              <div class="panel-head">
+                <h2>Requested standing posture</h2>
+                <span class="state-label">APP LIMITS</span>
+              </div>
+              <div class="posture-body">
+                <div class="posture-sliders">
+                  <div class="setting">
+                    <div class="slider-head">
+                      <label for="height">Height offset</label
+                      ><output id="height-value" for="height">+0 cm</output>
+                    </div>
+                    <input
+                      id="height"
+                      type="range"
+                      min="0"
+                      max="10"
+                      step="1"
+                      value="0"
+                    />
+                    <div class="range-labels">
+                      <span>0 cm</span><span>+10 cm</span>
+                    </div>
+                  </div>
+                  <div class="setting">
+                    <div class="slider-head">
+                      <label for="roll">Roll</label
+                      ><output id="roll-value" for="roll">0°</output>
+                    </div>
+                    <input
+                      id="roll"
+                      type="range"
+                      min="-5"
+                      max="5"
+                      step="1"
+                      value="0"
+                    />
+                    <div class="range-labels">
+                      <span>−5°</span><span>+5°</span>
+                    </div>
+                  </div>
+                  <div class="setting">
+                    <div class="slider-head">
+                      <label for="pitch">Pitch</label
+                      ><output id="pitch-value" for="pitch">0°</output>
+                    </div>
+                    <input
+                      id="pitch"
+                      type="range"
+                      min="-5"
+                      max="5"
+                      step="1"
+                      value="0"
+                    />
+                    <div class="range-labels">
+                      <span>−5°</span><span>+5°</span>
+                    </div>
+                  </div>
+                </div>
+                <button id="apply-button" type="button">
+                  Apply requested standing posture
                 </button>
+                <p id="posture-message" class="control-note">
+                  Request offsets; measured state is shown separately.
+                </p>
               </div>
-            </div>
-          </article>
-
-          <article class="card model-card">
-            <div class="card-head">
-              <div>
-                <span class="eyebrow">REFERENCE</span>
+            </section>
+            <section class="panel model-card">
+              <div class="panel-head">
                 <h2>Robot model</h2>
+                <span class="state-label">READ ONLY</span>
               </div>
-              <span class="model-tag">READ ONLY</span>
-            </div>
-            <div class="model-body">
               <img
                 id="model-image"
-                alt="Read-only SDK robot geometry or its unavailable state"
+                alt="SDK geometry or unavailable state"
+                width="720"
+                height="420"
               />
-              <div class="model-copy">
-                <strong id="model-status">Waiting for model</strong>
+              <p id="model-status" class="control-note">
+                Waiting for measured joint telemetry
+              </p>
+              <details class="model-info">
+                <summary>Model &amp; gesture details</summary>
                 <p>
-                  Joint geometry follows fresh measured state only when the
-                  robot skeleton matches the local SDK mesh. The grid is in the
-                  body frame, not the floor.
+                  Measured joints require a matching SDK skeleton. The
+                  body-frame grid does not show floor contact.
                 </p>
-              </div>
-            </div>
-          </article>
+                <label class="gesture-label"
+                  ><input id="gesture-toggle" type="checkbox" /> Supervised
+                  gesture mode</label
+                >
+                <p id="gesture-message">OFF · manual keyboard control</p>
+                <p>
+                  Requires aligned front depth and local MediaPipe bundles;
+                  disables keyboard drive.
+                </p>
+              </details>
+            </section>
+          </div>
+          <details class="developer panel">
+            <summary>
+              Developer telemetry &amp; module controls
+              <span id="module-summary">Waiting for modules</span>
+            </summary>
+            <div id="module-controls"></div>
+            <pre id="telemetry">No live telemetry</pre>
+          </details>
         </section>
-
-        <section class="controls-column" aria-label="Robot controls">
-          <article class="card control-card">
-            <div class="card-head">
-              <div>
-                <span class="eyebrow">CONTROL</span>
-                <h2>Robot movement</h2>
-              </div>
-              <span id="drive-state" class="small-state">LOCKED</span>
+        <section id="page-maps" class="page maps-page" aria-label="Maps" hidden>
+          <div class="workspace-head">
+            <div>
+              <h1>Maps</h1>
+              <p id="map-description">
+                Current world-frame map. Advanced 3D and timeline remain in
+                Rerun.
+              </p>
             </div>
-            <div class="power-row">
-              <button
-                id="power-button"
-                class="button button-outline"
-                type="button"
+            <div class="head-actions">
+              <button id="rerun-help" type="button">Advanced 3D / Rerun</button
+              ><select id="map-view" aria-label="Map projection">
+                <option value="top">Top view</option>
+                <option value="iso">Spatial preview</option>
+              </select>
+            </div>
+          </div>
+          <div class="map-workspace">
+            <aside class="layers">
+              <h2>Scene layers</h2>
+              <label
+                ><input type="checkbox" data-layer="occupancy" checked />
+                Occupancy</label
               >
-                Power On</button
-              ><button
-                id="stand-button"
-                class="button button-primary"
-                type="button"
+              <p>Observed free / occupied / unknown</p>
+              <label
+                ><input type="checkbox" data-layer="entities" checked />
+                Entities</label
+              ><label
+                ><input type="checkbox" data-layer="robot" checked /> Robot
+                pose</label
+              ><label
+                ><input type="checkbox" data-layer="route" checked /> Target
+                &amp; route</label
               >
-                Stand
+              <div class="layer-divider"></div>
+              <h3>In Rerun</h3>
+              <p>
+                Point cloud · meshes<br />Camera frustums<br />Human
+                skeletons<br />Pointing rays<br />Memory &amp; history<br />Frame
+                timeline
+              </p>
+              <button id="map-runs-button" type="button">
+                Find a recording
               </button>
+            </aside>
+            <div class="map-stage">
+              <div class="map-badge" id="map-source">No map available</div>
+              <svg
+                id="main-map"
+                class="world-map"
+                viewBox="0 0 700 620"
+                role="img"
+                aria-label="Selectable world-frame map"
+              ></svg>
+              <p class="map-key">
+                Select an entity to use the same confirmation workflow.
+              </p>
             </div>
-            <div class="drive-divider"></div>
-            <div class="drive-layout">
-              <div
-                class="direction-pad"
-                aria-label="Hold direction buttons to move"
+            <aside class="entity-inspector">
+              <h2>Entity details</h2>
+              <div id="entity-list" class="entity-list"></div>
+              <h3 id="entity-title">Select an entity</h3>
+              <dl id="entity-details" class="detail-list"></dl>
+              <button
+                id="entity-target"
+                class="button-primary"
+                type="button"
+                disabled
               >
-                <button
-                  type="button"
-                  data-direction="w"
-                  class="direction up"
-                  aria-label="Hold to move forward"
+                Use as target
+              </button>
+              <details>
+                <summary>Evidence &amp; history</summary>
+                <pre id="entity-history">
+Live geometry has no persisted history. Open a recorded memory session in Runs.</pre
                 >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  data-direction="a"
-                  class="direction left"
-                  aria-label="Hold to move left"
-                >
-                  ←
-                </button>
-                <button
-                  type="button"
-                  data-direction="s"
-                  class="direction down"
-                  aria-label="Hold to move backward"
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  data-direction="d"
-                  class="direction right"
-                  aria-label="Hold to move right"
-                >
-                  →
-                </button>
-                <div class="direction-center">HOLD</div>
-              </div>
-              <div class="drive-explain">
-                <strong>Hold to move</strong>
-                <p>
-                  Use W/A/S/D, arrow keys, or the buttons. Release to request
-                  zero velocity.
-                </p>
-                <p class="muted">
-                  Driving unlocks after fresh robot state confirms Stand.
-                </p>
-              </div>
+              </details>
+              <p>
+                Scores are uncalibrated evidence. Occupancy is observed
+                geometry, not certified clearance.
+              </p>
+            </aside>
+          </div>
+          <div class="map-bottom">
+            <section>
+              <h2>Current frame</h2>
+              <p id="map-frame">Waiting for a selected RGB-D pair</p>
+              <p>
+                Recorded playback, scrubbing and multi-camera overlays open in
+                Rerun.
+              </p>
+            </section>
+            <section>
+              <h2>Module health</h2>
+              <div id="map-health"></div>
+            </section>
+          </div>
+        </section>
+        <section
+          id="page-runs"
+          class="page library-page"
+          aria-label="Runs"
+          hidden
+        >
+          <div class="workspace-head">
+            <div>
+              <h1>Runs &amp; memory</h1>
+              <p>
+                Latest 500 local artifacts: episodes, maps, evidence and viewer
+                recordings.
+              </p>
             </div>
-            <div class="slider-head">
-              <label for="speed">Speed limit</label
-              ><output id="speed-value" for="speed">0.20 m/s</output>
+            <button id="refresh-runs" type="button">Refresh library</button>
+          </div>
+          <label class="library-search" for="run-filter"
+            >Filter artifacts<input
+              id="run-filter"
+              type="search"
+              placeholder="Run name, map, memory, result…"
+          /></label>
+          <div class="library-layout">
+            <div id="run-list" class="run-list"><p>No runs loaded.</p></div>
+            <aside class="artifact-inspector">
+              <h2 id="artifact-title">Select an artifact</h2>
+              <p id="artifact-description">
+                Configured local directories are scanned on demand. No cloud
+                storage.
+              </p>
+              <button id="open-recording" type="button" hidden>
+                Open in Rerun
+              </button>
+              <pre id="artifact-content">
+Select a result, map, or memory database to inspect it.</pre
+              >
+            </aside>
+          </div>
+        </section>
+        <section
+          id="page-evaluate"
+          class="page evaluate-page"
+          aria-label="Evaluate"
+          hidden
+        >
+          <div class="workspace-head">
+            <div>
+              <h1>Evaluate</h1>
+              <p>
+                Existing checks and results. Run commands in your local
+                Terminal.
+              </p>
             </div>
-            <input
-              id="speed"
-              type="range"
-              min="5"
-              max="35"
-              step="1"
-              value="20"
-            />
-            <div class="range-labels">
-              <span>0.05 m/s</span><span>0.35 m/s</span>
-            </div>
-            <p class="control-note">
-              Motion commands expire after 0.35 s without updates. STOP MOVEMENT
-              requests zero velocity; it does not operate the class E-stop.
-            </p>
-          </article>
-
-          <article class="card posture-card">
-            <div class="card-head">
-              <div>
-                <span class="eyebrow">STAND REQUEST</span>
-                <h2>Standing posture</h2>
-              </div>
-            </div>
-            <p class="section-intro">
-              These sliders change a request. Apply sends a high-level stand
-              command only after a fresh stationary check.
-            </p>
-            <div class="setting">
-              <div class="slider-head">
-                <label for="height">Height offset</label
-                ><output id="height-value" for="height">+0 cm</output>
-              </div>
-              <input
-                id="height"
-                type="range"
-                min="0"
-                max="10"
-                step="1"
-                value="0"
-              />
-              <div class="range-labels">
-                <span>0 cm</span><span>+10 cm</span>
-              </div>
-            </div>
-            <div class="setting">
-              <div class="slider-head">
-                <label for="roll">Roll</label
-                ><output id="roll-value" for="roll">0°</output>
-              </div>
-              <input
-                id="roll"
-                type="range"
-                min="-5"
-                max="5"
-                step="1"
-                value="0"
-              />
-              <div class="range-labels"><span>−5°</span><span>+5°</span></div>
-            </div>
-            <div class="setting">
-              <div class="slider-head">
-                <label for="pitch">Pitch</label
-                ><output id="pitch-value" for="pitch">0°</output>
-              </div>
-              <input
-                id="pitch"
-                type="range"
-                min="-5"
-                max="5"
-                step="1"
-                value="0"
-              />
-              <div class="range-labels"><span>−5°</span><span>+5°</span></div>
-            </div>
-            <button
-              id="apply-button"
-              class="button button-primary wide"
-              type="button"
+            <span class="validation-label"
+              >M5 · READY FOR PHYSICAL VALIDATION</span
             >
-              Apply requested standing posture
-            </button>
-            <p id="posture-message" class="inline-status">
-              Waiting for confirmed Stand.
+          </div>
+          <div id="evaluation-commands" class="command-list"></div>
+          <div class="evaluation-foot">
+            <a href="#runs">Browse benchmark results in Runs ↗</a>
+            <p>
+              Saved results describe their source. Offline tests do not validate
+              physical Spot geometry or movement.
             </p>
-          </article>
-
-          <article class="card gesture-card">
-            <div class="card-head">
-              <div>
-                <span class="eyebrow">OPTIONAL</span>
-                <h2>Supervised gesture mode</h2>
-              </div>
-              <label class="switch"
-                ><input
-                  id="gesture-toggle"
-                  type="checkbox"
-                  aria-label="Enable supervised gesture mode" /><span></span
-              ></label>
-            </div>
-            <p id="gesture-message" class="section-intro">
-              OFF • manual keyboard control
-            </p>
-            <p class="muted small">
-              Requires local gesture models and aligned front depth. Gesture
-              mode disables keyboard driving.
-            </p>
-          </article>
+          </div>
+          <details class="panel developer">
+            <summary>Earlier consoles &amp; advanced workflows</summary>
+            <div id="legacy-commands" class="command-list"></div>
+          </details>
         </section>
       </main>
-
       <footer class="safety-footer">
-        <strong>Class E-stop stays separate.</strong> Keep the class E-stop open
-        and within reach during live operation. SCOPE is an independent project,
-        not endorsed by Boston Dynamics.
+        SCOPE is an independent project, not endorsed by Boston Dynamics.
+        <strong
+          >Keep the separate class E-stop available during robot
+          control.</strong
+        >
       </footer>
     </div>
-
     <dialog id="connect-dialog" class="connect-dialog">
-      <form id="connect-form" method="dialog">
+      <form id="connect-form">
         <div class="dialog-head">
-          <span class="eyebrow">LIVE CONNECTION</span
-          ><button
+          <h2>Connect to Spot</h2>
+          <button
             id="close-dialog"
             type="button"
             aria-label="Close connection form"
@@ -335,50 +646,119 @@
             ×
           </button>
         </div>
-        <h2>Connect to Spot</h2>
         <p>
-          Connect this laptop to Spot's network and confirm the robot address
-          with your instructor. Start the separate class E-stop first.
+          Confirm the robot address with your instructor. Robot control requires
+          the separate class E-stop.
         </p>
         <label
           >Robot address<input
             id="robot-host"
             name="host"
             type="text"
-            placeholder="192.168.80.3"
             autocomplete="off"
-            required
-        /></label>
-        <label
+            required /></label
+        ><label
           >Username<input
             id="robot-user"
             name="username"
             type="text"
             autocomplete="username"
-            required
-        /></label>
-        <label
+            required /></label
+        ><label
           >Password<input
             id="robot-password"
             name="password"
             type="password"
             autocomplete="current-password"
-            required
-        /></label>
+            required /></label
+        ><label
+          >Connection mode<select id="connect-mode">
+            <option value="observe">Observe · sensors only</option>
+            <option value="dry_run">Dry run · GO logs, no motion</option>
+            <option value="robot_control">Robot control · command lease</option>
+          </select></label
+        ><label class="check-label"
+          ><input id="connect-humans" type="checkbox" /> Enable human pose /
+          pointing</label
+        ><label class="check-label" id="authority-row" hidden
+          ><input id="command-authority" type="checkbox" /> I have command
+          authority and the class E-stop is ready.</label
+        >
+        <p class="control-note">
+          Credentials are used for this connection and are not saved. Select the
+          visual/depth pair after connection.
+        </p>
         <p id="connect-error" class="dialog-error" role="alert" hidden></p>
         <div class="dialog-actions">
-          <button
-            id="cancel-connect"
-            type="button"
-            class="button button-outline"
-          >
-            Cancel</button
-          ><button type="submit" class="button button-primary">Connect</button>
+          <button id="cancel-connect" type="button">Cancel</button
+          ><button id="connect-submit" class="button-primary" type="submit">
+            Connect
+          </button>
         </div>
-        <p class="dialog-note">
-          Credentials are used for this connection and are not written to disk.
-        </p>
       </form>
+    </dialog>
+    <dialog id="settings-dialog" class="settings-dialog">
+      <div class="dialog-head">
+        <h2>Camera &amp; perception settings</h2>
+        <button
+          id="close-settings"
+          type="button"
+          aria-label="Close camera settings"
+        >
+          ×
+        </button>
+      </div>
+      <p>
+        Several sources may be acquired and displayed. Only one selected
+        visual/depth pair feeds the current perception pipeline.
+      </p>
+      <form id="pair-form">
+        <div class="pair-fields">
+          <label for="visual-source"
+            >Perception visual source<select id="visual-source"></select></label
+          ><label for="depth-source"
+            >Paired depth source<select id="depth-source"></select
+          ></label>
+        </div>
+        <label class="check-label"
+          ><input id="alignment-verified" type="checkbox" /> Alignment
+          physically verified for this pair</label
+        >
+        <p class="control-note">
+          Measured calibration, timestamps and odom transforms are still
+          checked. No world geometry or destination is authorized from an
+          unverified pair.
+        </p>
+        <button id="apply-pair" class="button-primary" type="submit">
+          Apply processing pair
+        </button>
+      </form>
+      <div id="camera-policies" class="camera-policies"></div>
+      <p id="settings-message" role="status">
+        Connect sensors to configure cameras.
+      </p>
+    </dialog>
+    <dialog id="rerun-dialog">
+      <div class="dialog-head">
+        <h2>Advanced spatial debugger</h2>
+        <button
+          id="close-rerun"
+          type="button"
+          aria-label="Close debugger instructions"
+        >
+          ×
+        </button>
+      </div>
+      <p>
+        Rerun retains the full 3D point cloud, occupancy, camera frustums,
+        skeletons, pointing, memory, evidence and timeline. Open any .rrd
+        recording from Runs.
+      </p>
+      <p>Create a small existing synthetic recording in Terminal:</p>
+      <pre>
+.venv/bin/python -m scope map synthetic --humans --entities --oracle-keypoints --frames 4 --output runs/spatial-preview</pre
+      >
+      <a href="#runs" id="rerun-to-runs">Find recorded viewers in Runs ↗</a>
     </dialog>
     <div id="toast" class="toast" role="alert" hidden></div>
   </body>

@@ -148,6 +148,7 @@ class SpotSession:
         self.closing = threading.Event()
         self.keys = set()
         self.pending = None
+        self.active_action = None
         self.height = 0.0
         self.roll = 0.0
         self.pitch = 0.0
@@ -368,6 +369,7 @@ class SpotSession:
             while not self.closing.is_set():
                 with self.lock:
                     action, self.pending = self.pending, None
+                    self.active_action = action
                     keys = set(self.keys)
                     height = self.height
                     speed = self.speed
@@ -436,6 +438,8 @@ class SpotSession:
                                     self.signals.posture_status.emit(
                                         'Standing posture requested; actual pose may be limited by Spot')
                     next_command = time.monotonic() + COMMAND_PERIOD
+                    with self.lock:
+                        self.active_action = None
                     if action == 'stop':
                         last_gesture_direction = 0
                 elif gesture_mode and (time.monotonic() >= next_command or

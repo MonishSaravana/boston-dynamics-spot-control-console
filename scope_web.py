@@ -55,7 +55,7 @@ class WebSignals:
 
 
 class WebControl:
-    def __init__(self, demo=False):
+    def __init__(self, demo=False, runs_dirs=None):
         self.demo = demo
         self.lock = threading.RLock()
         self.command_lock = threading.RLock()
@@ -65,6 +65,7 @@ class WebControl:
         self.powered = False
         self.armed = False
         self.failed = False
+        self.disconnecting = False
         self.generation = 0
         self.gesture_active = False
         self.gesture_available = False
@@ -90,6 +91,8 @@ class WebControl:
         self.closed = threading.Event()
         if demo:
             self._load_demo()
+        from scope.workspace import Workspace
+        self.workspace = Workspace(self, demo=demo, runs_dirs=runs_dirs or [ROOT / 'runs'])
         self.watchdog = threading.Thread(target=self._watch_drive, daemon=True)
         self.watchdog.start()
 
@@ -108,6 +111,7 @@ class WebControl:
                 'model_version': self.model_version, 'has_panorama': self.panorama is not None,
                 'panorama_version': self.panorama_version,
                 'e_stop_note': 'Keep the separate class E-stop available. STOP MOVEMENT only requests zero velocity.',
+                'workspace': self.workspace.snapshot(),
             }
 
     def receive(self, generation, name, *args):
@@ -141,7 +145,10 @@ class WebControl:
         with self.lock:
             if self.session is not None:
                 raise ValueError('Disconnect from Spot before changing mode')
+            if self.workspace.backend is not None and not self.demo:
+                raise ValueError('Disconnect sensors before entering demo')
             self.demo = enabled
+            self.disconnecting = False
             self.connected = self.powered = self.armed = self.failed = False
             self.gesture_active = False
             self.gesture_available = False
@@ -161,6 +168,8 @@ class WebControl:
                 self.model_angles = None
                 self.model_status = 'Waiting for fresh joint telemetry'
                 self.model_version += 1
+        self.workspace.stop()
+        self.workspace.submit('demo', {'enabled': enabled}).result(timeout=10)
 
     def connect(self, hostname, username, password):
         with self.command_lock:
@@ -182,14 +191,22 @@ class WebControl:
             self.session = SpotSession(hostname, WebSignals(self, self.generation), username, password)
             self.status = 'Connecting to Spot…'
             self.failed = False
+            self.disconnecting = False
             self.session.start()
 
     def disconnect(self):
+        # Stop immediately, then release the command lock while the sensor
+        # worker drains. A pending GO or mode change also needs that lock.
+        with self.lock:
+            self.disconnecting = True
+            self.armed = False
+        self.stop()
+        if threading.current_thread() is not self.workspace.thread:
+            self.workspace.submit('disconnect', {}).result(timeout=25)
         with self.command_lock:
             return self._disconnect_locked()
 
     def _disconnect_locked(self):
-        self.stop()
         with self.lock:
             session, self.session = self.session, None
             self.generation += 1
@@ -208,6 +225,7 @@ class WebControl:
             return self._stop_locked()
 
     def _stop_locked(self):
+        self.workspace.stop()
         with self.lock:
             self.held.clear()
             self.controller = None
@@ -232,10 +250,13 @@ class WebControl:
         if not isinstance(keys, list) or set(keys) - DRIVE_KEYS:
             raise ValueError('Invalid direction keys')
         now = time.monotonic()
+        workspace = self.workspace.snapshot()
+        if workspace['available'] and (workspace['mode'] != 'robot_control' or workspace['navigation_active']):
+            raise ValueError('Manual movement requires Robot control with no active GO')
         with self.lock:
             if epoch != self.control_epoch:
                 raise ValueError('Control session changed; release keys and try again')
-            if not self.session or not self.connected or not self.armed or self.failed or self.gesture_active:
+            if not self.session or not self.connected or not self.armed or self.failed or self.gesture_active or self.disconnecting:
                 raise ValueError('Movement is locked until fresh standing state is confirmed')
             if self.controller not in (None, controller) and now - self.last_drive < DRIVE_TIMEOUT:
                 raise ValueError('Another browser tab is controlling movement')
@@ -261,6 +282,7 @@ class WebControl:
 
     def _watch_drive(self):
         while not self.closed.wait(0.05):
+            self.workspace.watchdog()
             with self.command_lock:
                 with self.lock:
                     expired = bool(self.held) and time.monotonic() - self.last_drive > DRIVE_TIMEOUT
@@ -294,13 +316,17 @@ class WebControl:
         if name == 'stop':
             self.stop()
             return
+        workspace = self.workspace.snapshot()
+        if name in ('power', 'stand', 'posture', 'gesture') and workspace['available'] and (
+                workspace['mode'] != 'robot_control' or workspace['navigation_active']):
+            raise ValueError('Manual requests require Robot control with no active GO')
         with self.lock:
             if data.get('epoch') != self.control_epoch:
                 raise ValueError('Control session changed; refresh before sending another request')
             session = self.session
             connected, powered, armed, failed = (
                 self.connected, self.powered, self.armed, self.failed)
-        if not session or not connected or failed:
+        if not session or not connected or failed or self.disconnecting:
             raise ValueError('Connect to Spot first')
         if name == 'power':
             if powered:
@@ -398,6 +424,7 @@ class WebControl:
             self.gesture_status = 'OFF • connection problem'
             self.control_epoch += 1
             self.status = message
+        self.workspace.stop()
 
     def on_frame(self, pictures):
         encoded = {name: jpeg_bytes(picture) for name, picture in pictures.items()}
@@ -433,6 +460,7 @@ class WebControl:
     def close(self):
         self.closed.set()
         self.disconnect()
+        self.workspace.close()
 
 
 def model_png(angles, message):
@@ -542,6 +570,15 @@ class Handler(BaseHTTPRequestHandler):
         return host in (f'127.0.0.1:{self.server.server_port}',
                         f'localhost:{self.server.server_port}')
 
+    def _workspace_action(self, name, data):
+        from concurrent.futures import TimeoutError
+        future = self.app.workspace.submit(name, data)
+        try:
+            future.result(timeout=25)
+        except TimeoutError:
+            self.app.stop()
+            raise ValueError('Workspace request timed out; movement authorization was cleared')
+
     def do_GET(self):
         if not self._valid_host():
             return self._json(403, {'error': 'Invalid host'})
@@ -552,7 +589,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, 'text/html; charset=utf-8', body)
         if path == '/favicon.ico':
             return self._send(204, 'image/x-icon', b'')
-        if path in ('/style.css', '/app.js'):
+        if path == '/favicon.svg':
+            return self._send(200, 'image/svg+xml', (WEB / 'favicon.svg').read_bytes())
+        if path in ('/style.css', '/app.js', '/workspace.js'):
             type_ = 'text/css' if path.endswith('.css') else 'text/javascript'
             return self._send(200, type_ + '; charset=utf-8', (WEB / path[1:]).read_bytes())
         if self.headers.get('X-SCOPE-Token') != self.app.token:
@@ -568,6 +607,11 @@ class Handler(BaseHTTPRequestHandler):
             with self.app.lock:
                 angles, message = self.app.model_angles, self.app.model_status
             return self._send(200, 'image/png', model_png(angles, message))
+        if path.startswith('/api/workspace/image/'):
+            picture = self.app.workspace.image(path.rsplit('/', 1)[-1])
+            return self._send(200, 'image/jpeg', picture) if picture else self._json(404, {'error': 'Display disabled or frame unavailable'})
+        if path == '/api/runs':
+            return self._json(200, {'artifacts': self.app.workspace.library.scan()})
         return self._json(404, {'error': 'Not found'})
 
     def do_POST(self):
@@ -597,6 +641,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.app.presence(data.get('controller'))
             elif path == '/api/action':
                 self.app.action(data.get('name'), data)
+            elif path == '/api/workspace/action':
+                if data.get('epoch') != self.app.workspace.epoch:
+                    raise ValueError('Workspace changed; refresh before sending a request')
+                self._workspace_action(data.get('name'), data)
+            elif path == '/api/workspace/connect':
+                self._workspace_action('connect', data)
+            elif path == '/api/workspace/presence':
+                self.app.workspace.presence(data.get('controller'))
+            elif path == '/api/runs/inspect':
+                return self._json(200, self.app.workspace.library.inspect(data.get('id', '')))
+            elif path == '/api/runs/open':
+                return self._json(200, {'message': self.app.workspace.library.open_viewer(data.get('id', ''))})
             else:
                 return self._json(404, {'error': 'Unknown command'})
             return self._json(200, {'ok': True})
@@ -606,9 +662,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(500, {'error': 'Command failed; check connection status'})
 
 
-def make_server(demo=False, port=0):
+def make_server(demo=False, port=0, runs_dirs=None):
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    server.app = WebControl(demo=demo)
+    server.app = WebControl(demo=demo, runs_dirs=runs_dirs)
     server.daemon_threads = True
     return server
 
@@ -618,8 +674,9 @@ def main():
     parser.add_argument('--demo', action='store_true', help='Simulated images; no robot client or command')
     parser.add_argument('--port', type=int, default=0, help='Local port; 0 chooses an available port')
     parser.add_argument('--no-browser', action='store_true', help='Do not open the browser automatically')
+    parser.add_argument('--runs-dir', type=Path, action='append', help='Local artifact root (repeatable; default: ./runs)')
     args = parser.parse_args()
-    server = make_server(demo=args.demo, port=args.port)
+    server = make_server(demo=args.demo, port=args.port, runs_dirs=args.runs_dir)
     url = f'http://127.0.0.1:{server.server_port}/'
     print(f'SCOPE local console: {url}', flush=True)
     if not args.no_browser:

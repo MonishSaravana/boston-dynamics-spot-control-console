@@ -54,3 +54,6 @@ __pycache__/
 !docs/illustrative-split-screen-ui.png
 !docs/camera-samples/
 !docs/camera-samples/*.png
+
+# Generated previews and local documents
+/output/

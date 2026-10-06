@@ -2,7 +2,7 @@
 
 No lease, power, E-stop, or robot-command service is imported here.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections import deque
 import io
 import time
@@ -195,13 +195,16 @@ class SpotReadOnlySource:
         self._last_displayed = {}
 
     @classmethod
-    def connect(cls, hostname, *, root_frame="odom"):
+    def connect(cls, hostname, *, root_frame="odom", username=None, password=None):
         import bosdyn.client
         import bosdyn.client.util
         from bosdyn.client.image import ImageClient
         from bosdyn.client.robot_state import RobotStateClient
         robot = bosdyn.client.create_standard_sdk("scope-read-only-interaction").create_robot(hostname)
-        bosdyn.client.util.authenticate(robot)
+        if username is not None and password is not None:
+            robot.authenticate(username, password)
+        else:
+            bosdyn.client.util.authenticate(robot)
         robot.time_sync.wait_for_sync(timeout_sec=5.)
         return cls(robot.ensure_client(ImageClient.default_service_name),
                    robot.ensure_client(RobotStateClient.default_service_name),
@@ -210,7 +213,7 @@ class SpotReadOnlySource:
     def configure(self, name, *, acquire=None, process=None, display=None, max_hz=None):
         if name not in self.policy:
             raise ValueError("Camera source unavailable")
-        policy = self.policy[name]
+        policy = replace(self.policy[name])
         for field, value in (("acquire", acquire), ("process", process),
                              ("display", display)):
             if value is not None:
@@ -220,6 +223,7 @@ class SpotReadOnlySource:
         if max_hz is not None:
             policy.max_hz = float(max_hz)
         policy.validate()
+        self.policy[name] = policy
 
     def poll(self):
         """A failed source does not prevent reading other enabled cameras."""
