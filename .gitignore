@@ -50,12 +50,8 @@ __pycache__/
 *.sqlite-shm
 
 # Reviewed documentation captures of the offline application UI
-!docs/illustrative-dashboard-ui.png
-!docs/illustrative-split-screen-ui.png
 !docs/browser-live-destination.png
 !docs/browser-pose-preview.png
-!docs/browser-panel-docking.png
-!docs/browser-world.png
 !docs/camera-samples/
 !docs/camera-samples/*.png
 
