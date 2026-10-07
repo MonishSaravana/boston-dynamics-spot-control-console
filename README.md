@@ -8,19 +8,6 @@ This is an independent project, not a Boston Dynamics product, and nothing here 
 
 *Offline demo. The camera image is a generated fixture, not a Spot capture, and the robot model is the SDK model at its zero pose, not measured robot state.*
 
-## What works, and what doesn't
-
-The console has been run on macOS Apple Silicon with Python 3.14. Windows and Linux are untested. The browser console has not been validated on a physical robot, so treat every robot mode as untried until you have tested it yourself.
-
-| Mode | Spot needed | What it does |
-| --- | --- | --- |
-| Offline demo | No | Simulated room and camera images with a virtual robot. GO moves only the virtual robot. Power, Stand, drive and posture are disabled. |
-| Observe | Yes, read-only | Cameras and robot state. No command lease and no GO. This is the default for a live connection. |
-| Dry run | Yes, read-only | The same target and destination pipeline. GO records the destination (`WOULD_EXECUTE_NO_MOTION`) and sends nothing. |
-| Robot control | Yes, with a lease | Adds manual drive and standing posture. Needs explicit command authority and the separate class E-stop. GO is disabled. |
-
-GO that moves the real robot is not in this branch. A supervised version exists on `codex/m5-live-spot-interaction`; it has only been exercised with a fake command client.
-
 ## Quick start
 
 Python 3.11 to 3.14 is required.
