@@ -109,6 +109,7 @@ class WebControl:
                 'panorama_status': self.panorama_status, 'model_status': self.model_status,
                 'cameras': list(self.cameras), 'frame_versions': dict(self.frame_versions),
                 'model_version': self.model_version, 'has_panorama': self.panorama is not None,
+                'model_angles': dict(self.model_angles) if self.model_angles else None,
                 'panorama_version': self.panorama_version,
                 'e_stop_note': 'Keep the separate class E-stop available. STOP MOVEMENT only requests zero velocity.',
                 'workspace': self.workspace.snapshot(),
@@ -531,6 +532,48 @@ def model_png(angles, message):
 
 
 @lru_cache(maxsize=1)
+def model_geometry():
+    """Serialize the local SDK base URDF for the browser viewer; never stored in the repo."""
+    import xml.etree.ElementTree as ET
+    from zipfile import ZipFile
+    from spot_model_view import JOINT_NAMES, SDK_URDF
+    with ZipFile(SDK_URDF) as archive:
+        root = ET.fromstring(archive.read('model.urdf'))
+        links = {}
+        for link in root.findall('link'):
+            filename = link.find('visual/geometry/mesh').get('filename')
+            rgba = link.find('visual/material/color').get('rgba').split()
+            vertices, faces = [], []
+            for line in archive.read(filename).decode('utf-8').splitlines():
+                parts = line.split()
+                if parts and parts[0] == 'v':
+                    vertices.extend(round(float(value), 5) for value in parts[1:4])
+                elif parts and parts[0] == 'f':
+                    ids = [int(part.split('/')[0]) - 1 for part in parts[1:]]
+                    for i in range(1, len(ids) - 1):
+                        faces.extend((ids[0], ids[i], ids[i + 1]))
+            links[link.get('name')] = {'vertices': vertices, 'faces': faces,
+                                       'color': [float(value) for value in rgba[:3]]}
+        joints = []
+        for name in JOINT_NAMES:
+            joint = root.find(f"joint[@name='{name}']")
+            origin, limit = joint.find('origin'), joint.find('limit')
+            joints.append({
+                'name': name,
+                'parent': joint.find('parent').get('link'),
+                'child': joint.find('child').get('link'),
+                'xyz': [float(x) for x in origin.get('xyz').split()],
+                'rpy': [float(x) for x in origin.get('rpy').split()],
+                'axis': [float(x) for x in joint.find('axis').get('xyz').split()],
+                'lower': float(limit.get('lower')),
+                'upper': float(limit.get('upper')),
+            })
+    if len(joints) != 12 or len(links) != 13:
+        raise ValueError('The SDK base URDF does not contain the expected 12 leg joints')
+    return json.dumps({'links': links, 'joints': joints}, separators=(',', ':')).encode()
+
+
+@lru_cache(maxsize=1)
 def _model_mesh():
     from spot_model_view import SpotUrdfMesh
     return SpotUrdfMesh()
@@ -593,7 +636,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(204, 'image/x-icon', b'')
         if path == '/favicon.svg':
             return self._send(200, 'image/svg+xml', (WEB / 'favicon.svg').read_bytes())
-        if path in ('/style.css', '/app.js', '/workspace.js'):
+        if path in ('/style.css', '/app.js', '/workspace.js', '/dock.js', '/model.js'):
             type_ = 'text/css' if path.endswith('.css') else 'text/javascript'
             return self._send(200, type_ + '; charset=utf-8', (WEB / path[1:]).read_bytes())
         if self.headers.get('X-SCOPE-Token') != self.app.token:
@@ -605,6 +648,11 @@ class Handler(BaseHTTPRequestHandler):
             with self.app.lock:
                 image = self.app.panorama if name == 'panorama' else self.app.frames.get(name)
             return self._send(200, 'image/jpeg', image) if image else self._json(404, {'error': 'Frame unavailable'})
+        if path == '/api/model/geometry':
+            try:
+                return self._send(200, 'application/json; charset=utf-8', model_geometry())
+            except (FileNotFoundError, KeyError, AttributeError, ValueError, ImportError):
+                return self._json(404, {'error': 'SDK base URDF unavailable in this installation'})
         if path == '/api/model':
             with self.app.lock:
                 angles, message = self.app.model_angles, self.app.model_status

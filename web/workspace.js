@@ -9,7 +9,6 @@ let candidateSignature = "";
 let policySignature = "";
 let confirmedState = null;
 let worldZoom = 1;
-let liveView = "camera";
 let reviewFixture = true;
 let evidenceVersion = null;
 let priorSelected = null;
@@ -976,6 +975,7 @@ for (const button of document.querySelectorAll("[data-map-view]"))
   button.addEventListener("click", () => {
     $("map-view").value = button.dataset.mapView;
     $("map-view").dispatchEvent(new Event("change"));
+    $("map-panel-meta").textContent = button.textContent.trim();
   });
 setInterval(() => {
   if (
@@ -1169,23 +1169,14 @@ function updateCanvasSource(ws, control) {
   if (!ws) return;
   const showReview = control.demo && reviewFixture && $("camera-select").value === "evidence";
   const camera = showReview ? "Lab preview" : names[$("camera-select").value] || ws.visual_source;
-  $("canvas-source").textContent = liveView === "world"
-    ? ws.world_frame
-    : liveView === "split"
-      ? `${camera} + ${ws.world_frame}`
-      : `Camera / ${camera}`;
+  $("canvas-source").textContent = `${camera} · ${ws.world_frame}`;
 }
-function setLiveView(value) {
-  liveView = value;
-  $("live-layout").dataset.view = value;
-  for (const button of document.querySelectorAll("[data-live-view]"))
-    button.setAttribute(
-      "aria-pressed",
-      String(button.dataset.liveView === value),
-    );
+// Bring a Live panel into view; the dock keeps the rest of the layout.
+function revealLivePanel(id) {
+  liveDock.show(id);
+  liveDock.flash(id);
   mapSignature = "";
-  updateCanvasSource(workspaceState, state);
-  if (workspaceState)
+  if (workspaceState && id === "world")
     requestAnimationFrame(() => drawMap($("route-map"), workspaceState));
 }
 function updateWorkstation(ws, control) {
@@ -1216,9 +1207,8 @@ function updateWorkstation(ws, control) {
     loadImage("evidence", $("target-camera"));
   }
   if (ws.selected?.entity_id && priorSelected !== ws.selected.entity_id) {
-    if (control.demo) setLiveView("world");
-    $("live-layout").dataset.inspector = "open";
-    $("live-inspector-toggle").setAttribute("aria-expanded", "true");
+    if (control.demo && !liveDock.visible("world")) revealLivePanel("world");
+    liveDock.show("inspector");
   }
   priorSelected = ws.selected?.entity_id || null;
   $("fixture-toggle").hidden = !control.demo;
@@ -1310,8 +1300,6 @@ function updateWorkstation(ws, control) {
     : "World / top view";
   scheduleInspectorOverflow();
 }
-for (const button of document.querySelectorAll("[data-live-view]"))
-  button.addEventListener("click", () => setLiveView(button.dataset.liveView));
 $("fixture-toggle").addEventListener("click", () => {
   reviewFixture = !reviewFixture;
   updateWorkstation(workspaceState, state);
@@ -1319,12 +1307,22 @@ $("fixture-toggle").addEventListener("click", () => {
 $("camera-select").addEventListener("change", () => {
   if (workspaceState) updateWorkstation(workspaceState, state);
 });
-$("review-route").addEventListener("click", () => setLiveView("world"));
-$("live-inspector-toggle").addEventListener("click", () => {
-  const closed = $("live-layout").dataset.inspector === "closed";
-  $("live-layout").dataset.inspector = closed ? "open" : "closed";
-  $("live-inspector-toggle").setAttribute("aria-expanded", String(closed));
-});
+$("review-route").addEventListener("click", () => revealLivePanel("world"));
+$("live-inspector-toggle").addEventListener("click", () =>
+  liveDock.toggle("inspector"),
+);
+liveDock.onChange(() =>
+  $("live-inspector-toggle").setAttribute(
+    "aria-expanded",
+    String(liveDock.visible("inspector")),
+  ),
+);
+worldDock.onChange(() =>
+  $("world-inspector-toggle").setAttribute(
+    "aria-expanded",
+    String(worldDock.visible("entity")),
+  ),
+);
 function showDrawer(id) {
   clearMovement();
   if (id === "diagnostic-drawer") $(id).show();
@@ -1429,67 +1427,9 @@ const mapResize = new ResizeObserver(() => {
 mapResize.observe($("route-map"));
 mapResize.observe($("main-map"));
 
-// Inspector resizing changes only screen layout, never world coordinates.
-let inspectorWidth =
-  parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue("--inspector"),
-  ) || 306;
-function resizeInspector(width) {
-  inspectorWidth = Math.max(240, Math.min(460, innerWidth * 0.4, width));
-  document.documentElement.style.setProperty(
-    "--inspector",
-    `${inspectorWidth}px`,
-  );
-  for (const handle of document.querySelectorAll(".inspector-resizer"))
-    handle.setAttribute("aria-valuenow", String(Math.round(inspectorWidth)));
-}
-for (const panel of document.querySelectorAll(
-  ".target-column, .entity-inspector",
-)) {
-  const handle = document.createElement("div");
-  handle.className = "inspector-resizer";
-  handle.tabIndex = 0;
-  handle.setAttribute("role", "separator");
-  handle.setAttribute("aria-orientation", "vertical");
-  handle.setAttribute("aria-label", "Resize inspector width");
-  handle.setAttribute("aria-valuemin", "240");
-  handle.setAttribute("aria-valuemax", "460");
-  handle.setAttribute("aria-valuenow", String(inspectorWidth));
-  panel.prepend(handle);
-  let startX = null,
-    startWidth = null;
-  handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    clearMovement();
-    startX = event.clientX;
-    startWidth = panel.clientWidth;
-    handle.setPointerCapture(event.pointerId);
-    event.preventDefault();
-  });
-  handle.addEventListener("pointermove", (event) => {
-    if (startX !== null) resizeInspector(startWidth + startX - event.clientX);
-  });
-  for (const name of ["pointerup", "pointercancel", "lostpointercapture"])
-    handle.addEventListener(name, () => {
-      startX = null;
-    });
-  handle.addEventListener("keydown", (event) => {
-    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
-    event.preventDefault();
-    clearMovement();
-    resizeInspector(
-      event.key === "Home"
-        ? 306
-        : panel.clientWidth + (event.key === "ArrowLeft" ? 16 : -16),
-    );
-  });
-}
-$("world-inspector-toggle").addEventListener("click", () => {
-  const layout = document.querySelector(".map-workspace");
-  const closed = layout.dataset.inspector === "closed";
-  layout.dataset.inspector = closed ? "open" : "closed";
-  $("world-inspector-toggle").setAttribute("aria-expanded", String(closed));
-});
+$("world-inspector-toggle").addEventListener("click", () =>
+  worldDock.toggle("entity"),
+);
 
 // Modal setup dialogs retain an immediately reachable Stop inside the top layer.
 for (const dialog of document.querySelectorAll(

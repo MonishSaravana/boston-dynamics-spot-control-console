@@ -33,6 +33,44 @@ class FakeSession:
 
 
 class BrowserConsoleTests(unittest.TestCase):
+    def test_model_geometry_and_simulated_angles_are_read_only(self):
+        from spot_model_view import JOINT_NAMES, SDK_URDF
+        server = make_server(demo=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f'http://127.0.0.1:{server.server_port}'
+        headers = {'X-SCOPE-Token': server.app.token}
+        try:
+            with urlopen(Request(base + '/api/state', headers=headers)) as response:
+                state = json.load(response)
+            if not SDK_URDF.is_file():
+                self.assertIsNone(state['model_angles'])
+                with self.assertRaises(HTTPError) as missing:
+                    urlopen(Request(base + '/api/model/geometry', headers=headers))
+                self.assertEqual(missing.exception.code, 404)
+                return
+            self.assertEqual(state['model_angles'], {name: 0.0 for name in JOINT_NAMES})
+            self.assertTrue(state['model_status'].startswith('SIMULATED'))
+            with self.assertRaises(HTTPError) as denied:
+                urlopen(base + '/api/model/geometry')
+            self.assertEqual(denied.exception.code, 403)
+            with urlopen(Request(base + '/api/model/geometry', headers=headers)) as response:
+                geometry = json.load(response)
+            self.assertEqual([joint['name'] for joint in geometry['joints']], list(JOINT_NAMES))
+            self.assertEqual(len(geometry['links']), 13)
+            for joint in geometry['joints']:
+                self.assertLess(joint['lower'], joint['upper'])
+            for link in geometry['links'].values():
+                self.assertEqual(len(link['vertices']) % 3, 0)
+                self.assertEqual(len(link['faces']) % 3, 0)
+                self.assertLess(max(link['faces']), len(link['vertices']) // 3)
+            self.assertEqual(server.app.snapshot()['armed'], False)
+        finally:
+            server.shutdown()
+            server.app.close()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_demo_serves_simulated_frames_without_robot_client(self):
         server = make_server(demo=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

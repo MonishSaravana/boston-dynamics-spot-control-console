@@ -303,12 +303,14 @@ function updateState(next) {
     panorama: next.panorama_version,
     workspace: ws?.version,
   };
-  if (previousModelVersion !== next.model_version) {
+  // The server-rendered model image is only a fallback when WebGL or the mesh is unavailable.
+  if (window.modelFallback && previousModelVersion !== next.model_version) {
     previousModelVersion = next.model_version;
     loadImage("model", $("model-image"));
   }
   if ((!next.armed || next.failed) && held.size) clearMovement();
   if (typeof updateWorkspace === "function") updateWorkspace(ws, next);
+  if (typeof updateModelPanel === "function") updateModelPanel(next);
 }
 
 async function refresh() {
@@ -353,7 +355,8 @@ function canDrive() {
     !["INPUT", "SELECT", "TEXTAREA"].includes(
       document.activeElement?.tagName,
     ) &&
-    !document.activeElement?.closest(".inspector-resizer")
+    !document.activeElement?.closest(".dock-splitter") &&
+    !document.body.classList.contains("dock-dragging")
   );
 }
 

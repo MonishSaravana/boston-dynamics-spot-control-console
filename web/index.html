@@ -12,8 +12,10 @@
     <title>SCOPE | Local robot console</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/style.css" />
+    <script src="/dock.js" defer=""></script>
     <script src="/app.js" defer=""></script>
     <script src="/workspace.js" defer=""></script>
+    <script src="/model.js" defer=""></script>
   </head>
   <body>
     <noscript
@@ -68,27 +70,6 @@
             aria-label="Live workspace"
           >
             <div class="canvas-toolbar">
-              <div class="view-switch" aria-label="Live canvas view">
-                <button
-                  type="button"
-                  data-live-view="camera"
-                  aria-pressed="true"
-                >
-                  Camera</button
-                ><button
-                  type="button"
-                  data-live-view="world"
-                  aria-pressed="false"
-                >
-                  World</button
-                ><button
-                  type="button"
-                  data-live-view="split"
-                  aria-pressed="false"
-                >
-                  Split
-                </button>
-              </div>
               <form id="query-form" class="target-search">
                 <label class="sr-only" for="target-query"
                   >Find or target an object</label
@@ -116,8 +97,18 @@
                   <path d="M7 9v6l-2 6M7 15l2 6M7 11l4-2h3" />
                   <path d="M15 9h7" stroke-dasharray="1.5 2.5" /></svg
                 ><span id="point-label">Use pointing</span></button
-              ><span id="point-note" class="sr-only"></span
-              ><button
+              ><span id="point-note" class="sr-only"></span>
+              <div class="toolbar-spacer"></div>
+              <button
+                id="live-layout-button"
+                class="quiet-button"
+                type="button"
+                popovertarget="live-layout-menu"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 13h9M13 4v16" /></svg>Layout
+              </button>
+              <div id="live-layout-menu" class="layout-menu" popover></div>
+              <button
                 id="live-inspector-toggle"
                 class="icon-button"
                 type="button"
@@ -129,9 +120,15 @@
                 </svg>
               </button>
             </div>
-            <div class="live-layout" data-view="camera" id="live-layout">
-              <div class="live-canvas">
-                <section class="camera-card" aria-label="Camera canvas">
+            <div id="live-dock" class="dock-root">
+              <section
+                class="dock-panel camera-card"
+                data-panel="camera"
+                data-title="Camera"
+                aria-label="Camera"
+              >
+                <div class="panel-bar">
+                  <span class="panel-grip" aria-hidden="true"></span><h2>Camera</h2>
                   <div class="camera-tools">
                     <label class="sr-only" for="camera-select"
                       >Camera source</label
@@ -164,6 +161,8 @@
                       Sensor fixture
                     </button>
                   </div>
+                </div>
+                <div class="panel-body">
                   <div id="camera-single" class="camera-stage">
                     <img
                       id="camera-image"
@@ -198,17 +197,21 @@
                       Stitch once
                     </button>
                   </div>
-                </section>
-                <section
-                  class="spatial-preview"
-                  aria-label="Destination and route canvas"
-                >
-                  <div class="world-canvas-head">
-                    <span id="live-world-title">World / top view</span
-                    ><button id="live-fit" class="quiet-button" type="button">
-                      Fit view
-                    </button>
-                  </div>
+                </div>
+              </section>
+              <section
+                class="dock-panel spatial-preview"
+                data-panel="world"
+                data-title="World map"
+                aria-label="Destination and route map"
+              >
+                <div class="panel-bar">
+                  <span class="panel-grip" aria-hidden="true"></span><h2 id="live-world-title">World / top view</h2>
+                  <button id="live-fit" class="quiet-button" type="button">
+                    Fit view
+                  </button>
+                </div>
+                <div class="panel-body">
                   <svg
                     id="route-map"
                     class="world-map"
@@ -220,22 +223,91 @@
                     <span id="route-scale">Scale unavailable</span>
                   </div>
                   <p id="route-readout" class="sr-only"></p>
-                </section>
-                <div class="canvas-status">
-                  <span id="canvas-source">Waiting for data</span
-                  ><span id="canvas-selection">No selection</span
-                  ><button id="live-3d" type="button" class="quiet-button">
-                    Advanced 3D
-                  </button>
                 </div>
-              </div>
+              </section>
+              <section
+                class="dock-panel model-panel"
+                data-panel="model"
+                data-title="Robot model"
+                aria-label="Robot model"
+              >
+                <div class="panel-bar">
+                  <span class="panel-grip" aria-hidden="true"></span><h2>Robot model</h2>
+                  <div class="view-switch" aria-label="Model source">
+                    <button type="button" data-model-mode="measured" aria-pressed="true">
+                      Measured</button
+                    ><button type="button" data-model-mode="preview" aria-pressed="false">
+                      Pose preview
+                    </button>
+                  </div>
+                  <span id="model-tag" class="tag">No telemetry</span>
+                </div>
+                <div class="panel-body model-body">
+                  <div class="model-stage">
+                    <canvas
+                      id="model-canvas"
+                      aria-label="Spot model. Drag to orbit, right-drag to pan, scroll to zoom. In pose preview, drag a leg or the body to pose it."
+                    ></canvas>
+                    <img
+                      id="model-image"
+                      alt="SDK geometry or unavailable state"
+                      width="720"
+                      height="420"
+                      hidden
+                    />
+                    <p id="model-readout" class="model-readout" hidden></p>
+                    <p id="model-status" class="model-status">
+                      Waiting for measured joint telemetry
+                    </p>
+                    <button
+                      id="model-reset-view"
+                      class="icon-button model-view-reset"
+                      type="button"
+                      aria-label="Reset model view"
+                      title="Reset view"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
+                    </button>
+                  </div>
+                  <div class="model-controls">
+                    <div class="model-actions">
+                      <button id="model-from-measured" type="button">From measured</button
+                      ><button id="model-stand" type="button">Stand</button
+                      ><button id="model-zero" type="button">URDF zero</button>
+                    </div>
+                    <fieldset class="model-group">
+                      <legend>Body · feet stay planted</legend>
+                      <div id="model-body-rows" class="model-rows"></div>
+                    </fieldset>
+                    <fieldset class="model-group">
+                      <legend>Joints · degrees</legend>
+                      <table class="joint-table">
+                        <thead>
+                          <tr><th scope="col">Leg</th><th scope="col">Hip X</th><th scope="col">Hip Y</th><th scope="col">Knee</th></tr>
+                        </thead>
+                        <tbody id="joint-rows"></tbody>
+                      </table>
+                    </fieldset>
+                    <button id="model-copy-posture" type="button">
+                      Copy height, roll &amp; pitch to posture request
+                    </button>
+                    <p id="model-note" class="control-note">
+                      Measured joints follow robot telemetry. Pose preview is
+                      local and sends nothing to Spot.
+                    </p>
+                  </div>
+                </div>
+              </section>
               <aside
-                class="target-column inspector"
+                class="dock-panel target-column inspector"
+                data-panel="inspector"
+                data-title="Inspector"
                 aria-label="Inspector"
                 data-phase="empty"
                 data-tab="target"
               >
-                <div class="inspector-tabs" role="tablist" aria-label="Inspector">
+                <div class="inspector-tabs panel-bar" role="tablist" aria-label="Inspector">
+                  <span class="panel-grip" aria-hidden="true"></span>
                   <button
                     id="tab-target"
                     type="button"
@@ -500,40 +572,30 @@
                       Request offsets; measured state is shown separately.
                     </p>
                   </section>
-                  <section class="robot-section model-card">
+                  <section class="robot-section">
                     <div class="section-row">
-                      <h2>Robot model</h2>
-                      <span class="tag">Read only</span>
+                      <h2>Gesture mode</h2>
                     </div>
-                    <img
-                      id="model-image"
-                      alt="SDK geometry or unavailable state"
-                      width="720"
-                      height="420"
-                    />
-                    <p id="model-status" class="control-note">
-                      Waiting for measured joint telemetry
+                    <label class="gesture-label"
+                      ><input id="gesture-toggle" type="checkbox" />
+                      Supervised gesture mode</label
+                    >
+                    <p id="gesture-message" class="control-note">OFF · manual keyboard control</p>
+                    <p class="control-note">
+                      Requires aligned front depth and local MediaPipe bundles;
+                      disables keyboard drive.
                     </p>
-                    <details class="model-info">
-                      <summary>Model &amp; gesture details</summary>
-                      <p>
-                        Measured joints require a matching SDK skeleton. The
-                        body-frame grid does not show floor contact.
-                      </p>
-                      <label class="gesture-label"
-                        ><input id="gesture-toggle" type="checkbox" />
-                        Supervised gesture mode</label
-                      >
-                      <p id="gesture-message">OFF · manual keyboard control</p>
-                      <p>
-                        Requires aligned front depth and local MediaPipe
-                        bundles; disables keyboard drive.
-                      </p>
-                    </details>
                   </section>
                 </div>
               </aside>
             </div>
+            <div class="canvas-status">
+                  <span id="canvas-source">Waiting for data</span
+                  ><span id="canvas-selection">No selection</span
+                  ><button id="live-3d" type="button" class="quiet-button">
+                    Advanced 3D
+                  </button>
+                </div>
           </section>
           <section
             id="page-maps"
@@ -561,6 +623,15 @@
                 >3D in Rerun
               </button>
               <button
+                id="world-layout-button"
+                class="quiet-button"
+                type="button"
+                popovertarget="world-layout-menu"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 13h9M13 4v16" /></svg>Layout
+              </button>
+              <div id="world-layout-menu" class="layout-menu" popover></div>
+              <button
                 id="world-inspector-toggle"
                 type="button"
                 class="icon-button"
@@ -572,9 +643,15 @@
                 </svg>
               </button>
             </div>
-            <div class="map-workspace">
-              <aside class="layers">
-                <h2>Scene layers</h2>
+            <div id="world-dock" class="dock-root">
+              <aside
+                class="dock-panel layers"
+                data-panel="layers"
+                data-title="Scene layers"
+                aria-label="Scene layers"
+              >
+                <div class="panel-bar"><span class="panel-grip" aria-hidden="true"></span><h2>Scene layers</h2></div>
+                <div class="panel-body layers-body">
                 <label
                   ><input type="checkbox" data-layer="occupancy" checked />
                   Occupancy</label
@@ -605,8 +682,19 @@
                     Browse recordings
                   </button>
                 </details>
+                </div>
               </aside>
-              <div class="map-stage">
+              <div
+                class="dock-panel map-stage"
+                data-panel="map"
+                data-title="Map"
+                aria-label="Map"
+              >
+                <div class="panel-bar">
+                  <span class="panel-grip" aria-hidden="true"></span><h2>Map</h2>
+                  <span id="map-panel-meta" class="panel-meta"></span>
+                </div>
+                <div class="panel-body">
                 <svg
                   id="main-map"
                   class="world-map"
@@ -650,12 +738,19 @@
                   ><span class="unknown-key">Unknown</span
                   ><span id="map-scale">World units</span>
                 </div>
+                </div>
               </div>
-              <aside class="entity-inspector inspector">
-                <div class="inspector-head">
-                  <h2>Entity</h2>
+              <aside
+                class="dock-panel entity-inspector inspector"
+                data-panel="entity"
+                data-title="Entity"
+                aria-label="Entity inspector"
+              >
+                <div class="panel-bar">
+                  <span class="panel-grip" aria-hidden="true"></span><h2>Entity</h2>
                   <span class="state-label">Geometry</span>
                 </div>
+                <div class="panel-body entity-body">
                 <h1 id="entity-title">Select an entity</h1>
                 <dl id="entity-details" class="detail-list"></dl>
                 <button
@@ -671,6 +766,7 @@
                   <pre id="entity-history">
 Select an entity to inspect evidence. Recorded history is in local memory sessions.</pre>
                 </details>
+                </div>
               </aside>
             </div>
             <div class="world-bottom">
