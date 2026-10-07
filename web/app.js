@@ -186,7 +186,7 @@ function updateState(next) {
   buildSplit(displayCameras);
   setView();
 
-  $("mode-pill").textContent = next.demo ? "Demo data" : "No robot";
+  $("mode-pill").textContent = next.demo ? "Offline demo" : "No robot";
   $("mode-pill").classList.toggle("demo", next.demo);
   $("state-dot").className =
     "state-dot" + (next.failed ? " error" : next.armed ? " ready" : "");

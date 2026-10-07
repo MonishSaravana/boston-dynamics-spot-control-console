@@ -24,14 +24,20 @@
       <header class="topbar">
         <a class="brand" href="#operate" aria-label="SCOPE Live"
           ><svg viewBox="0 0 32 32" aria-hidden="true">
-            <circle cx="16" cy="16" r="11" />
-            <path d="M16 2v4M30 16h-4M16 30v-4M2 16h4" /></svg
+            <circle cx="16" cy="16" r="10" />
+            <path d="M16 2v5M30 16h-5M16 30v-5M2 16h5" /></svg
           ><strong>SCOPE</strong></a
-        ><span class="workstation-name">Robot workstation</span>
+        >
+        <nav class="primary-nav" aria-label="Workspace">
+          <a href="#operate" aria-current="page">Live</a
+          ><a href="#maps">World</a
+          ><a href="#runs">History</a
+          ><a href="#evaluate">Debug</a>
+        </nav>
         <div class="topbar-spacer"></div>
         <button
           id="connection-status"
-          class="header-state quiet-button"
+          class="mode-tag"
           type="button"
           aria-label="Connection status and settings"
         >
@@ -43,57 +49,18 @@
           Connection
         </button>
         <div class="stop-wrap">
-          <button
+          <small>Zero-velocity request<br />Class E-stop separate</small
+          ><button
             id="stop-button"
             class="stop-button"
             type="button"
             title="Request zero velocity. Class E-stop is separate."
           >
-            <span class="stop-icon" aria-hidden="true"></span>STOP MOVEMENT</button
-          ><small>Zero velocity · class E-stop separate</small>
+            <span class="stop-icon" aria-hidden="true"></span>STOP MOVEMENT
+          </button>
         </div>
       </header>
       <div class="workstation">
-        <nav class="workspace-rail" aria-label="Workspace">
-          <a href="#operate" aria-current="page" title="Live workspace"
-            ><svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 7h10v10H4zM14 10l6-3v10l-6-3" /></svg
-            ><span>Live</span></a
-          ><a href="#maps" title="World workspace"
-            ><svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 3l9 5v9l-9 5-9-5V8zM3 8l9 5 9-5M12 13v9" /></svg
-            ><span>World</span></a
-          ><a href="#runs" title="History workspace"
-            ><svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 5h16v15H4zM7 2v6M17 2v6M7 12h10M7 16h6" /></svg
-            ><span>History</span></a
-          ><a href="#evaluate" title="Debug and evaluation"
-            ><svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 13h4l3-8 4 14 3-6h4" /></svg
-            ><span>Debug</span></a
-          >
-          <div class="rail-bottom">
-            <button
-              id="manual-tool"
-              title="Manual robot controls"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M12 3v18M3 12h18M9 6l3-3 3 3M18 9l3 3-3 3M15 18l-3 3-3-3M6 15l-3-3 3-3"
-                /></svg
-              ><span>Control</span></button
-            ><button
-              id="diagnostic-tool"
-              title="Developer telemetry"
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 4h16v12H4zM8 20h8M12 16v4" /></svg
-              ><span>Inspect</span>
-            </button>
-          </div>
-        </nav>
         <main>
           <section
             id="page-operate"
@@ -141,11 +108,14 @@
               </form>
               <button
                 id="point-button"
-                class="quiet-button"
                 type="button"
                 title="Use human pointing"
               >
-                Use pointing</button
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="7" cy="5" r="2" />
+                  <path d="M7 9v6l-2 6M7 15l2 6M7 11l4-2h3" />
+                  <path d="M15 9h7" stroke-dasharray="1.5 2.5" /></svg
+                ><span id="point-label">Use pointing</span></button
               ><span id="point-note" class="sr-only"></span
               ><button
                 id="live-inspector-toggle"
@@ -261,107 +231,306 @@
               </div>
               <aside
                 class="target-column inspector"
-                aria-label="Target inspector"
+                aria-label="Inspector"
                 data-phase="empty"
+                data-tab="target"
               >
-                <div class="inspector-head">
-                  <h2 id="inspector-heading">Interaction</h2>
+                <div class="inspector-tabs" role="tablist" aria-label="Inspector">
+                  <button
+                    id="tab-target"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="panel-target"
+                    data-inspector-tab="target"
+                  >
+                    Target</button
+                  ><button
+                    id="tab-robot"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="panel-robot"
+                    data-inspector-tab="robot"
+                  >
+                    Robot
+                  </button>
                   <span id="target-stage" class="state-label">No target</span>
-                  <span id="inspector-overflow" class="scroll-cue" hidden>More ↓</span>
                 </div>
-                <div class="target-body">
-                  <details id="target-inputs" class="target-inputs" open>
-                    <summary>Choose target</summary>
-                    <div
-                      id="candidate-list"
-                      class="candidate-list"
-                      aria-label="Target candidates"
-                    ></div>
-                  </details>
-                  <div class="target-evidence">
-                    <span id="target-kind" class="inspector-eyebrow"
-                      >Target</span
-                    >
-                    <h1 id="target-label">Find an object</h1>
-                    <p id="target-explanation">
-                      Search above, use pointing, or select in World.
-                    </p>
-                    <div
-                      class="evidence-thumbnail"
-                      id="evidence-thumbnail"
-                      hidden
-                    >
-                      <img
-                        id="target-camera"
-                        alt="Actual selected processing frame with target evidence"
-                        width="640"
-                        height="480"
-                      /><span>Processing frame</span>
-                    </div>
-                    <dl id="target-details" class="detail-list"></dl>
-                    <details id="evidence-detail">
-                      <summary>Evidence details</summary>
-                      <pre id="target-raw">No candidate evidence</pre>
+                <div
+                  id="panel-target"
+                  class="inspector-panel target-panel"
+                  role="tabpanel"
+                  aria-labelledby="tab-target"
+                >
+                  <h2 id="inspector-heading" class="sr-only">Interaction</h2>
+                  <div class="target-body">
+                    <details id="target-inputs" class="target-inputs" open>
+                      <summary>Choose target</summary>
+                      <div
+                        id="candidate-list"
+                        class="candidate-list"
+                        aria-label="Target candidates"
+                      ></div>
                     </details>
-                  </div>
-                  <div class="destination">
-                    <div class="section-heading">
-                      <h2>Destination ready</h2>
-                      <button
-                        id="preview-button"
-                        class="quiet-button"
-                        type="button"
-                        disabled
+                    <div class="target-evidence">
+                      <span id="target-kind" class="sr-only">Target</span>
+                      <h1 id="target-label">Find an object</h1>
+                      <p id="target-explanation">
+                        Search above, use pointing, or select in World.
+                      </p>
+                      <div
+                        class="evidence-thumbnail"
+                        id="evidence-thumbnail"
+                        hidden
                       >
-                        Refresh
+                        <img
+                          id="target-camera"
+                          alt="Actual selected processing frame with target evidence"
+                          width="640"
+                          height="480"
+                        /><span>Processing frame</span>
+                      </div>
+                      <dl id="target-details" class="detail-list"></dl>
+                      <details id="evidence-detail">
+                        <summary>Evidence details</summary>
+                        <pre id="target-raw">No candidate evidence</pre>
+                      </details>
+                    </div>
+                    <div class="destination">
+                      <div class="section-heading">
+                        <h2>Destination ready</h2>
+                        <button
+                          id="preview-button"
+                          class="quiet-button"
+                          type="button"
+                          disabled
+                        >
+                          Refresh
+                        </button>
+                      </div>
+                      <p id="destination-empty">
+                        Inspect a target before planning a destination.
+                      </p>
+                      <p id="destination-target" class="destination-target"></p>
+                      <dl id="destination-details" class="detail-list"></dl>
+                      <button
+                        id="review-route"
+                        type="button"
+                        class="quiet-button"
+                      >
+                        Show route in canvas
                       </button>
                     </div>
-                    <p id="destination-empty">
-                      Inspect a target before planning a destination.
-                    </p>
-                    <p id="destination-target" class="destination-target"></p>
-                    <dl id="destination-details" class="detail-list"></dl>
-                    <button
-                      id="review-route"
-                      type="button"
-                      class="quiet-button"
-                    >
-                      Show route in canvas
-                    </button>
+                    <p
+                      id="interaction-message"
+                      class="interaction-message"
+                      role="status"
+                      aria-live="polite"
+                    ></p>
                   </div>
-                  <p
-                    id="interaction-message"
-                    class="interaction-message"
-                    role="status"
-                    aria-live="polite"
-                  ></p>
-                  <div class="idle-tools">
-                    <button id="inspector-manual" type="button">
-                      Manual robot controls
+                  <span id="inspector-overflow" class="scroll-cue" hidden
+                    >More below</span
+                  >
+                  <p id="go-note" class="go-note"></p>
+                  <div class="approval-actions">
+                    <button
+                      id="go-button"
+                      class="button-primary"
+                      type="button"
+                      disabled
+                    >
+                      GO
                     </button>
-                    <p>Power, stand, held movement &amp; requested posture</p>
+                    <button
+                      id="confirm-target"
+                      class="button-primary"
+                      type="button"
+                      disabled
+                    >
+                      Confirm target</button
+                    ><button id="reject-target" type="button" disabled>
+                      Reject
+                    </button>
                   </div>
                 </div>
-                <p id="go-note" class="go-note"></p>
-                <div class="approval-actions">
-                  <button
-                    id="go-button"
-                    class="button-primary"
-                    type="button"
-                    disabled
-                  >
-                    GO
-                  </button>
-                  <button
-                    id="confirm-target"
-                    class="button-primary"
-                    type="button"
-                    disabled
-                  >
-                    Confirm target</button
-                  ><button id="reject-target" type="button" disabled>
-                    Reject
-                  </button>
+                <div
+                  id="panel-robot"
+                  class="inspector-panel robot-panel"
+                  role="tabpanel"
+                  aria-labelledby="tab-robot"
+                  hidden
+                >
+                  <section id="manual-controls" class="robot-section">
+                    <div class="section-row">
+                      <h2>Robot state</h2>
+                      <span id="drive-state" class="tag">LOCKED</span>
+                    </div>
+                    <div class="power-row">
+                      <button id="power-button" type="button">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M12 3v8M7 6.5a7 7 0 1 0 10 0" /></svg
+                        >Power On</button
+                      ><button id="stand-button" type="button">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M12 18V6M7 11l5-5 5 5M5 21h14" /></svg
+                        >Stand
+                      </button>
+                    </div>
+                  </section>
+                  <section class="robot-section">
+                    <div class="slider-head">
+                      <label for="speed">Speed limit</label
+                      ><output id="speed-value" for="speed">0.20 m/s</output>
+                    </div>
+                    <input
+                      id="speed"
+                      type="range"
+                      min="5"
+                      max="35"
+                      step="1"
+                      value="20"
+                    />
+                    <div class="range-labels">
+                      <span>0.05 m/s</span><span>0.35 m/s</span>
+                    </div>
+                    <div class="drive-row">
+                      <div class="direction-pad" aria-label="Hold to move">
+                        <button
+                          type="button"
+                          data-direction="w"
+                          class="direction up"
+                          aria-label="Hold to move forward"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 15l6-6 6 6" /></svg></button
+                        ><button
+                          type="button"
+                          data-direction="a"
+                          class="direction left"
+                          aria-label="Hold to move left"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M15 6l-6 6 6 6" /></svg></button
+                        ><button
+                          type="button"
+                          data-direction="s"
+                          class="direction down"
+                          aria-label="Hold to move backward"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 9l6 6 6-6" /></svg></button
+                        ><button
+                          type="button"
+                          data-direction="d"
+                          class="direction right"
+                          aria-label="Hold to move right"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M9 6l6 6-6 6" /></svg>
+                        </button>
+                        <div class="direction-center" aria-hidden="true"></div>
+                      </div>
+                      <p class="control-note">
+                        Hold W/A/S/D or arrows. Release requests zero velocity.
+                        Commands expire after 0.35&nbsp;s.
+                      </p>
+                    </div>
+                  </section>
+                  <section class="robot-section posture-panel">
+                    <div class="section-row">
+                      <h2>Requested standing posture</h2>
+                      <span class="tag">App limits</span>
+                    </div>
+                    <div class="setting">
+                      <div class="slider-head">
+                        <label for="height">Height offset</label
+                        ><output id="height-value" for="height">+0 cm</output>
+                      </div>
+                      <input
+                        id="height"
+                        type="range"
+                        min="0"
+                        max="10"
+                        step="1"
+                        value="0"
+                      />
+                      <div class="range-labels">
+                        <span>0 cm</span><span>+10 cm</span>
+                      </div>
+                    </div>
+                    <div class="setting">
+                      <div class="slider-head">
+                        <label for="roll">Roll</label
+                        ><output id="roll-value" for="roll">0°</output>
+                      </div>
+                      <input
+                        id="roll"
+                        type="range"
+                        min="-5"
+                        max="5"
+                        step="1"
+                        value="0"
+                      />
+                      <div class="range-labels">
+                        <span>−5°</span><span>+5°</span>
+                      </div>
+                    </div>
+                    <div class="setting">
+                      <div class="slider-head">
+                        <label for="pitch">Pitch</label
+                        ><output id="pitch-value" for="pitch">0°</output>
+                      </div>
+                      <input
+                        id="pitch"
+                        type="range"
+                        min="-5"
+                        max="5"
+                        step="1"
+                        value="0"
+                      />
+                      <div class="range-labels">
+                        <span>−5°</span><span>+5°</span>
+                      </div>
+                    </div>
+                    <button id="apply-button" type="button">
+                      Apply requested posture
+                    </button>
+                    <p id="posture-message" class="control-note">
+                      Request offsets; measured state is shown separately.
+                    </p>
+                  </section>
+                  <section class="robot-section model-card">
+                    <div class="section-row">
+                      <h2>Robot model</h2>
+                      <span class="tag">Read only</span>
+                    </div>
+                    <img
+                      id="model-image"
+                      alt="SDK geometry or unavailable state"
+                      width="720"
+                      height="420"
+                    />
+                    <p id="model-status" class="control-note">
+                      Waiting for measured joint telemetry
+                    </p>
+                    <details class="model-info">
+                      <summary>Model &amp; gesture details</summary>
+                      <p>
+                        Measured joints require a matching SDK skeleton. The
+                        body-frame grid does not show floor contact.
+                      </p>
+                      <label class="gesture-label"
+                        ><input id="gesture-toggle" type="checkbox" />
+                        Supervised gesture mode</label
+                      >
+                      <p id="gesture-message">OFF · manual keyboard control</p>
+                      <p>
+                        Requires aligned front depth and local MediaPipe
+                        bundles; disables keyboard drive.
+                      </p>
+                    </details>
+                  </section>
                 </div>
               </aside>
             </div>
@@ -376,11 +545,20 @@
               <h1>World</h1>
               <span id="map-source" class="toolbar-meta">No map</span>
               <div class="toolbar-spacer"></div>
-              <select id="map-view" aria-label="Map projection">
+              <div class="view-switch" aria-label="Map projection">
+                <button type="button" data-map-view="top" aria-pressed="true">
+                  Top</button
+                ><button type="button" data-map-view="iso" aria-pressed="false">
+                  Isometric
+                </button>
+              </div>
+              <select id="map-view" aria-label="Map projection" hidden>
                 <option value="top">Top view</option>
                 <option value="iso">Isometric occupancy</option></select
-              ><button id="rerun-help" type="button" class="quiet-button">
-                3D · Rerun ↗
+              ><button id="rerun-help" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9" /></svg
+                >3D in Rerun
               </button>
               <button
                 id="world-inspector-toggle"
@@ -396,7 +574,7 @@
             </div>
             <div class="map-workspace">
               <aside class="layers">
-                <h2>Scene</h2>
+                <h2>Scene layers</h2>
                 <label
                   ><input type="checkbox" data-layer="occupancy" checked />
                   Occupancy</label
@@ -442,17 +620,28 @@
                     class="icon-button"
                     type="button"
                     aria-label="Zoom map in"
+                    title="Zoom in"
                   >
-                    +</button
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 6v12M6 12h12" /></svg></button
                   ><button
                     id="map-zoom-out"
                     class="icon-button"
                     type="button"
                     aria-label="Zoom map out"
+                    title="Zoom out"
                   >
-                    −</button
-                  ><button id="map-fit" class="quiet-button" type="button">
-                    Fit
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 12h12" /></svg></button
+                  ><button
+                    id="map-fit"
+                    class="icon-button"
+                    type="button"
+                    aria-label="Fit map to view"
+                    title="Fit to view"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
                   </button>
                 </div>
                 <div class="map-legend">
@@ -598,9 +787,7 @@ Select an artifact to inspect it.</pre>
           type="button"
           id="close-connection-menu"
           aria-label="Close connection menu"
-        >
-          ×
-        </button>
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
       </div>
       <p id="connection-message">Loading connection…</p>
       <div class="connection-actions">
@@ -610,179 +797,6 @@ Select an artifact to inspect it.</pre>
         </button>
       </div>
     </dialog>
-    <dialog id="manual-drawer" class="manual-drawer">
-      <div class="dialog-head">
-        <h2>Robot controls</h2>
-        <button
-          id="close-manual"
-          type="button"
-          aria-label="Close robot controls"
-        >
-          ×
-        </button>
-      </div>
-      <div class="manual-grid">
-        <section id="manual-controls" class="panel manual-panel">
-          <div class="panel-head">
-            <h2>Manual controls</h2>
-            <span id="drive-state" class="state-label">LOCKED</span>
-          </div>
-          <div class="manual-body">
-            <div class="manual-drive">
-              <div class="power-row">
-                <button id="power-button" type="button">Power On</button
-                ><button id="stand-button" type="button">Stand</button>
-              </div>
-              <div class="slider-head">
-                <label for="speed">Speed limit</label
-                ><output id="speed-value" for="speed">0.20 m/s</output>
-              </div>
-              <input
-                id="speed"
-                type="range"
-                min="5"
-                max="35"
-                step="1"
-                value="20"
-              />
-              <div class="range-labels">
-                <span>0.05 m/s</span><span>0.35 m/s</span>
-              </div>
-              <p class="control-note">
-                Hold W/A/S/D or arrows. Release requests zero velocity. Commands
-                expire after 0.35 s.
-              </p>
-            </div>
-            <div class="direction-pad" aria-label="Hold to move">
-              <button
-                type="button"
-                data-direction="w"
-                class="direction up"
-                aria-label="Hold to move forward"
-              >
-                ↑</button
-              ><button
-                type="button"
-                data-direction="a"
-                class="direction left"
-                aria-label="Hold to move left"
-              >
-                ←</button
-              ><button
-                type="button"
-                data-direction="s"
-                class="direction down"
-                aria-label="Hold to move backward"
-              >
-                ↓</button
-              ><button
-                type="button"
-                data-direction="d"
-                class="direction right"
-                aria-label="Hold to move right"
-              >
-                →
-              </button>
-              <div class="direction-center" aria-hidden="true">+</div>
-            </div>
-          </div>
-        </section>
-        <section class="panel posture-panel">
-          <div class="panel-head">
-            <h2>Requested standing posture</h2>
-            <span class="state-label">APP LIMITS</span>
-          </div>
-          <div class="posture-body">
-            <div class="posture-sliders">
-              <div class="setting">
-                <div class="slider-head">
-                  <label for="height">Height offset</label
-                  ><output id="height-value" for="height">+0 cm</output>
-                </div>
-                <input
-                  id="height"
-                  type="range"
-                  min="0"
-                  max="10"
-                  step="1"
-                  value="0"
-                />
-                <div class="range-labels">
-                  <span>0 cm</span><span>+10 cm</span>
-                </div>
-              </div>
-              <div class="setting">
-                <div class="slider-head">
-                  <label for="roll">Roll</label
-                  ><output id="roll-value" for="roll">0°</output>
-                </div>
-                <input
-                  id="roll"
-                  type="range"
-                  min="-5"
-                  max="5"
-                  step="1"
-                  value="0"
-                />
-                <div class="range-labels"><span>−5°</span><span>+5°</span></div>
-              </div>
-              <div class="setting">
-                <div class="slider-head">
-                  <label for="pitch">Pitch</label
-                  ><output id="pitch-value" for="pitch">0°</output>
-                </div>
-                <input
-                  id="pitch"
-                  type="range"
-                  min="-5"
-                  max="5"
-                  step="1"
-                  value="0"
-                />
-                <div class="range-labels"><span>−5°</span><span>+5°</span></div>
-              </div>
-            </div>
-            <button id="apply-button" type="button">
-              Apply requested standing posture
-            </button>
-            <p id="posture-message" class="control-note">
-              Request offsets; measured state is shown separately.
-            </p>
-          </div>
-        </section>
-        <section class="panel model-card">
-          <div class="panel-head">
-            <h2>Robot model</h2>
-            <span class="state-label">READ ONLY</span>
-          </div>
-          <img
-            id="model-image"
-            alt="SDK geometry or unavailable state"
-            width="720"
-            height="420"
-          />
-          <p id="model-status" class="control-note">
-            Waiting for measured joint telemetry
-          </p>
-          <details class="model-info">
-            <summary>Model &amp; gesture details</summary>
-            <p>
-              Measured joints require a matching SDK skeleton. The body-frame
-              grid does not show floor contact.
-            </p>
-            <label class="gesture-label"
-              ><input id="gesture-toggle" type="checkbox" /> Supervised gesture
-              mode</label
-            >
-            <p id="gesture-message">OFF · manual keyboard control</p>
-            <p>
-              Requires aligned front depth and local MediaPipe bundles; disables
-              keyboard drive.
-            </p>
-          </details>
-        </section>
-      </div>
-    </dialog>
     <dialog id="diagnostic-drawer" class="diagnostic-drawer">
       <div class="dialog-head">
         <h2>Diagnostics</h2>
@@ -790,9 +804,7 @@ Select an artifact to inspect it.</pre>
           id="close-diagnostics"
           type="button"
           aria-label="Close diagnostics"
-        >
-          ×
-        </button>
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
       </div>
       <div class="diagnostic-content">
         <section>
@@ -815,9 +827,7 @@ Select an artifact to inspect it.</pre>
             id="close-dialog"
             type="button"
             aria-label="Close connection form"
-          >
-            ×
-          </button>
+          ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
         </div>
         <p>
           Confirm the robot address with your instructor. Robot control requires
@@ -877,9 +887,7 @@ Select an artifact to inspect it.</pre>
           id="close-settings"
           type="button"
           aria-label="Close camera settings"
-        >
-          ×
-        </button>
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
       </div>
       <p>
         Several sources may be acquired and displayed. Only one selected
@@ -916,9 +924,7 @@ Select an artifact to inspect it.</pre>
     <dialog id="rerun-dialog" class="rerun-dialog">
       <div class="dialog-head">
         <h2>3D recordings · Rerun</h2>
-        <button id="close-rerun" type="button" aria-label="Close 3D recordings">
-          ×
-        </button>
+        <button id="close-rerun" type="button" aria-label="Close 3D recordings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
       </div>
       <div id="recording-options"></div>
       <div class="rerun-footer">
@@ -927,7 +933,7 @@ Select an artifact to inspect it.</pre>
           memory in the native viewer.
         </p>
         <a href="#runs" id="rerun-to-runs"
-          >Browse all recordings in History ↗</a
+          >Browse all recordings in History</a
         >
         <details>
           <summary>Existing recording command</summary>

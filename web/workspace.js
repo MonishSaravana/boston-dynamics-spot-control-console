@@ -208,8 +208,8 @@ function drawMap(svg, ws, large = false) {
           height: Math.max(3, y1 - y2),
           rx: 1,
           class: "entity-bound",
-          fill: selected ? "#e5bd7410" : "#9badb908",
-          stroke: selected ? "#e5bd74" : "#8ea4b0",
+          fill: selected ? "#f0b44c14" : "#c8d0d508",
+          stroke: selected ? "#f0b44c" : "#7d878d",
           "stroke-width": selected ? 1.5 : 1,
           "vector-effect": "non-scaling-stroke",
         }),
@@ -220,7 +220,7 @@ function drawMap(svg, ws, large = false) {
           el("path", {
             d: `M${x1 - 3} ${y2 + l}v${-l - 3}h${l + 3}M${x2 - l} ${y2 - 3}h${l + 3}v${l + 3}M${x2 + 3} ${y1 - l}v${l + 3}h${-l - 3}M${x1 + l} ${y1 + 3}h${-l - 3}v${-l - 3}`,
             fill: "none",
-            stroke: "#e5bd74",
+            stroke: "#f0b44c",
             "stroke-width": 1.5,
             "vector-effect": "non-scaling-stroke",
           }),
@@ -260,8 +260,8 @@ function drawMap(svg, ws, large = false) {
         cx: x,
         cy: y,
         r: 5,
-        fill: "#10231c",
-        stroke: "#a5e7d3",
+        fill: "#06140f",
+        stroke: "#3ecf9b",
         "stroke-width": 2,
       }),
     );
@@ -314,12 +314,12 @@ function drawMap(svg, ws, large = false) {
     glyph.append(
       el("circle", {
         r: 10,
-        fill: "#122027",
-        stroke: "#506974",
+        fill: "#15181a",
+        stroke: "#5b6469",
         "stroke-width": 1,
       }),
     );
-    glyph.append(el("path", { d: "M7 0L-5 -5L-3 0L-5 5Z", fill: "#e4edf1" }));
+    glyph.append(el("path", { d: "M7 0L-5 -5L-3 0L-5 5Z", fill: "#e6e8e9" }));
     content.append(glyph);
     const close =
       ws.destination &&
@@ -395,7 +395,7 @@ function drawMap(svg, ws, large = false) {
   svg.append(
     el("path", {
       d: `M24 ${height - 70}v5h${pixels}v-5`,
-      stroke: "#a8bac4",
+      stroke: "#8b9499",
       "stroke-width": 1.5,
       fill: "none",
     }),
@@ -464,6 +464,7 @@ function updateWorkspace(ws, control) {
     WOULD_EXECUTE_NO_MOTION:
       "Dry run recorded the SE2 destination. No movement command sent.",
     NOT_FOUND: "No target found. Try another object phrase.",
+    "AMBIGUOUS: select a candidate": `${ws.candidates?.length || "Several"} matches. Select one to inspect its evidence.`,
   };
   $("interaction-message").textContent = readable[ws.message] || ws.message;
   if (ws.available && !control.demo) {
@@ -545,7 +546,7 @@ function updateWorkspace(ws, control) {
   $("reject-target").disabled = !c;
   $("preview-button").disabled = !ws.confirmed;
   $("find-target").disabled = !ws.available;
-  $("point-button").textContent = control.demo
+  $("point-label").textContent = control.demo
     ? "Simulate pointing"
     : "Use pointing";
   $("point-button").disabled =
@@ -890,7 +891,7 @@ function route() {
   clearMovement();
   for (const page of document.querySelectorAll(".page"))
     page.hidden = page.id !== `page-${name}`;
-  for (const link of document.querySelectorAll(".workspace-rail > a")) {
+  for (const link of document.querySelectorAll(".primary-nav > a")) {
     if (link.hash === `#${name}`) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
@@ -964,8 +965,18 @@ for (const input of document.querySelectorAll("[data-layer]"))
   });
 $("map-view").addEventListener("change", () => {
   mapSignature = "";
+  for (const button of document.querySelectorAll("[data-map-view]"))
+    button.setAttribute(
+      "aria-pressed",
+      String(button.dataset.mapView === $("map-view").value),
+    );
   drawMap($("main-map"), workspaceState, true);
 });
+for (const button of document.querySelectorAll("[data-map-view]"))
+  button.addEventListener("click", () => {
+    $("map-view").value = button.dataset.mapView;
+    $("map-view").dispatchEvent(new Event("change"));
+  });
 setInterval(() => {
   if (
     workspaceState?.navigation_active &&
@@ -1185,6 +1196,7 @@ function updateWorkstation(ws, control) {
       : "empty";
   document.querySelector(".target-column").dataset.phase = phase;
   if (phase !== inspectorPhase) {
+    if (inspectorPhase !== null) selectInspectorTab("target");
     $("target-inputs").open = phase === "empty";
     inspectorPhase = phase;
     document.querySelector(".target-body").scrollTop = 0;
@@ -1238,7 +1250,7 @@ function updateWorkstation(ws, control) {
       : ws.available
         ? "Sensors available"
         : "No sensor connection";
-  if (control.demo) $("mode-pill").textContent = "Demo data";
+  if (control.demo) $("mode-pill").textContent = "Offline demo";
   else if (ws.available) $("mode-pill").textContent = "Spot connected";
   const defaultMessage = [
     "SCOPE source updated.",
@@ -1315,18 +1327,34 @@ $("live-inspector-toggle").addEventListener("click", () => {
 });
 function showDrawer(id) {
   clearMovement();
-  if (["manual-drawer", "diagnostic-drawer"].includes(id)) $(id).show();
+  if (id === "diagnostic-drawer") $(id).show();
   else $(id).showModal();
 }
-for (const id of ["manual-tool", "inspector-manual"])
-  $(id).addEventListener("click", () => showDrawer("manual-drawer"));
-$("close-manual").addEventListener("click", () => {
+// Robot controls share the Live inspector; switching tabs clears held movement.
+function selectInspectorTab(name) {
+  const column = document.querySelector(".target-column");
+  if (column.dataset.tab === name) return;
   clearMovement();
-  $("manual-drawer").close();
-});
-$("manual-drawer").addEventListener("cancel", clearMovement);
+  column.dataset.tab = name;
+  for (const tab of document.querySelectorAll("[data-inspector-tab]")) {
+    const selected = tab.dataset.inspectorTab === name;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    $(tab.getAttribute("aria-controls")).hidden = !selected;
+  }
+  scheduleInspectorOverflow();
+}
+for (const tab of document.querySelectorAll("[data-inspector-tab]")) {
+  tab.addEventListener("click", () => selectInspectorTab(tab.dataset.inspectorTab));
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const next = tab.dataset.inspectorTab === "target" ? "robot" : "target";
+    selectInspectorTab(next);
+    $(`tab-${next}`).focus();
+  });
+}
 for (const id of [
-  "diagnostic-tool",
   "footer-diagnostics",
   "world-diagnostics",
   "debug-diagnostics",
@@ -1347,11 +1375,9 @@ $("connection-status").addEventListener("click", () =>
 );
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  for (const id of ["manual-drawer", "diagnostic-drawer"]) {
-    if ($(id).open) {
-      clearMovement();
-      $(id).close();
-    }
+  if ($("diagnostic-drawer").open) {
+    clearMovement();
+    $("diagnostic-drawer").close();
   }
 });
 $("close-connection-menu").addEventListener("click", () =>
@@ -1508,7 +1534,7 @@ async function openAdvanced3D() {
       name.textContent = item.name;
       run.textContent = item.run;
       run.className = "recording-run";
-      arrow.textContent = "↗";
+      arrow.textContent = "Open";
       arrow.className = "recording-arrow";
       button.append(name, run, arrow);
       button.title = "Open actual recording in the native Rerun viewer";
