@@ -92,7 +92,7 @@ All events carry episode, time, global ID, evidence, and `scope-memory-v1`; scor
 
 ## Commands and module isolation
 
-Use the Python 3.11+ installation steps from the README:
+Use the Python 3.11+ installation steps from [the offline tools page](offline-tools.md#offline-3d-mapping):
 
 ```sh
 source .venv/bin/activate
