@@ -46,7 +46,7 @@ The Spot SDK, model bundles, credentials and camera captures are not in this rep
 1. Type `chair` in the search box. Other ways in: **Simulate pointing**, or **World**, select an entity, **Use as target**.
 2. Pick a candidate and press **Confirm target**.
 3. Check the destination, heading, standoff and route evidence in the inspector.
-4. Press **GO**. Each preview works once and expires after 10 s, and evidence older than 1.5 s cannot be confirmed.
+4. Press **GO**. Each preview works once and expires after 10 s, and evidence older than 1.5 s cannot be confirmed. In Robot control, manual drive, posture and gestures are blocked until the walk ends or you press Stop.
 
 ### Drive and posture (Robot control only)
 
@@ -82,7 +82,8 @@ Panels on Live and World can be rearranged: drag a panel bar onto another panel'
    python spot-sdk/python/examples/estop/estop_nogui.py 192.168.80.3
    ```
 
-3. Start the console in a second Terminal, open **Connection**, and enter the address, username and password. Choose Robot control only if you need to drive, and tick the command authority box once the E-stop is running.
+3. Start the console in a second Terminal, open **Connection**, and enter the address, username and password. Choose Robot control only if you need to drive or GO, and tick the command authority box once the E-stop is running. Press **Power On**, then **Stand**; driving and GO stay locked until fresh robot state confirms Spot is standing still.
+4. For GO, open **Sources**, choose the visual camera and its matching depth source (for example `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame`), and tick the alignment box only after checking on the robot that depth edges line up with the camera image.
 
 Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. One visual and depth pair feeds perception. Mapping and destination preview need physically verified alignment, calibration, timestamps and odom transforms. The alignment checkbox records that you checked it; it does not calibrate anything. The front panorama is an approximate stitch.
 
@@ -100,7 +101,7 @@ To run the tests:
 .venv/bin/python -m unittest discover
 ```
 
-The suite has 118 tests, and 3 of them skip unless optional datasets are present.
+The suite has 120 tests, and 3 of them skip unless optional datasets are present.
 
 ## Future plans
 

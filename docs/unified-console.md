@@ -1,8 +1,8 @@
 # SCOPE workstation
 
 This pass joins the existing interfaces. It adds no model, fusion system or
-planner. The supervised GO executor is only on `codex/m5-live-spot-interaction`
-and is **READY FOR PHYSICAL VALIDATION**. No physical Spot was connected or
+planner. The supervised GO executor runs in Robot control and is
+**READY FOR PHYSICAL VALIDATION**. No physical Spot was connected or
 commanded during this pass.
 
 ## Launch
@@ -59,7 +59,7 @@ Observe authenticates only images/state, with no command lease. Dry run
 records the proposed SE2 destination and sends no movement command. Robot
 control requires an explicitly authorized connection and the separate
 class E-stop. It reuses the manual SpotSession's SDK command client and
-lease for manual drive and posture; GO is disabled in this mode. Changing modes stops motion;
+lease for manual drive, posture and the supervised GO executor. Changing modes stops motion;
 an already acquired command lease remains until Disconnect. Reconnect in
 Observe for a connection that has no command authority.
 
@@ -171,7 +171,7 @@ Stop advances the command epoch before waiting for perception. It clears
 held inputs, gesture mode, navigation ownership and confirmation. Focus
 loss, hidden tabs, failed connections and shutdown request zero velocity.
 The browser heartbeat expires after 0.30 s and manual commands after 0.35 s.
-GO (demo and Dry run only) performs the existing fresh target, geometry,
+Supervised trajectory commands expire after 0.75 s. GO performs the existing fresh target, geometry,
 route and single-use checks.
 The class E-stop remains a separate process; GUI Stop is a zero-velocity
 request, not an E-stop.
