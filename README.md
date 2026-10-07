@@ -91,6 +91,7 @@ Returning to Observe or Dry run stops movement but keeps an existing command lea
 
 ## More tools
 
+- [How SCOPE works](docs/how-scope-works.html): an illustrated guide to the driving, mapping, object search, destination and GO logic, with the math behind each step. Open the file in a browser.
 - [Desktop (Qt) console](docs/qt-console.md): the original manual console, with supervised gesture mode and the front panorama.
 - [Offline mapping and perception](docs/offline-tools.md): RGB-D mapping, semantic objects, persistent memory, human pointing and text object queries, all runnable without a robot.
 - [Unified console guide](docs/unified-console.md), the [M5 checklist](docs/milestone-5.md) and the [development history](docs/development-history.md).
