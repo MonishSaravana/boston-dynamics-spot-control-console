@@ -24,7 +24,7 @@ From the repository with the existing environment:
 .venv/bin/python -m scope.m5_console --demo
 ```
 
-Type `chair`, select `chair_a` or `chair_b`, press **CONFIRM TARGET**, inspect the destination, then press **GO · virtual**. **Simulate pointing** proposes a simulated `chair_a` ranking through the same confirmation path. Clicking an entity directly uses the same path. The camera image and map are generated from a deterministic room fixture; they are not Spot captures or a measured performance result.
+Type `chair`, select `chair_a` or `chair_b`, press **Confirm target**, inspect the destination, then press **GO · virtual**. **Simulate pointing** proposes a simulated `chair_a` ranking through the same confirmation path. Clicking an entity directly uses the same path. The camera image and map are generated from a deterministic room fixture; they are not Spot captures or a measured performance result.
 
 ## Monday physical validation checklist
 

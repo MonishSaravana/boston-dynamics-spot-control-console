@@ -187,7 +187,7 @@ class SpotModelView(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, False)
-        painter.fillRect(self.rect(), QColor('#111e26'))
+        painter.fillRect(self.rect(), QColor('#070808'))
         width, height = self.width(), self.height()
         az, el = self.azimuth, self.elevation
         right = np.array([-math.sin(az), math.cos(az), 0.0])
@@ -217,7 +217,7 @@ class SpotModelView(QWidget):
             return center + xy * np.array([scale, -scale])
 
         # This reference grid is fixed to the URDF body frame, not a measured floor.
-        painter.setPen(QPen(QColor('#344650'), 1))
+        painter.setPen(QPen(QColor('#24292c'), 1))
         for coordinate in np.arange(-0.8, 0.81, 0.2):
             a, b = project(np.array([[-.9, coordinate, -.53], [.9, coordinate, -.53]]))
             painter.drawLine(QPointF(*a), QPointF(*b))
@@ -258,14 +258,14 @@ class SpotModelView(QWidget):
                                         int(base.blue()*factor)))
                 painter.drawPolygon(QPolygonF([QPointF(*point) for point in polygon]))
         else:
-            painter.setPen(QColor('#cad6dc'))
+            painter.setPen(QColor('#9ba3a8'))
             painter.drawText(self.rect().adjusted(20, 30, -20, -30),
                              Qt.AlignCenter | Qt.TextWordWrap,
                              self.error or 'Robot geometry appears when fresh joint telemetry is available')
-        painter.setPen(QColor('#dbe8ec'))
+        painter.setPen(QColor('#e6e8e9'))
         painter.drawText(self.rect().adjusted(12, 8, -12, -height + 56),
                          Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self.message)
-        painter.setPen(QColor('#aebfc7'))
+        painter.setPen(QColor('#848d92'))
         painter.drawText(self.rect().adjusted(12, height - 46, -12, -8),
                          Qt.AlignLeft | Qt.AlignBottom | Qt.TextWordWrap,
                          'SDK base URDF • read-only • body-frame grid, not floor contact')
