@@ -201,7 +201,7 @@ class BrowserConsoleTests(unittest.TestCase):
 class InstallerTests(unittest.TestCase):
     @staticmethod
     def launcher_module():
-        script = Path(__file__).resolve().parent / 'scripts' / 'launch_scope.py'
+        script = Path(__file__).resolve().parent.parent / 'scripts' / 'launch_scope.py'
         spec = importlib.util.spec_from_file_location('scope_launcher', script)
         launcher = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(launcher)

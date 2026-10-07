@@ -296,7 +296,7 @@ scope map episode runs/room-demo --output runs/room-replay --no-viewer
 Run mapping and existing offline tests without a robot:
 
 ```sh
-QT_QPA_PLATFORM=offscreen python -m unittest -v test_scope_mapping test_spot_gesture test_spot_gui_offline test_spot_model_view
+QT_QPA_PLATFORM=offscreen python -m unittest -v tests.test_scope_mapping tests.test_spot_gesture tests.test_spot_gui_offline tests.test_spot_model_view
 ```
 
 ## Semantic objects in the map

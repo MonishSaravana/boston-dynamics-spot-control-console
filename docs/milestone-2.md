@@ -60,11 +60,11 @@ The real run on six frames of the public TUM `freiburg1_xyz` recording produced 
 
 ```sh
 QT_QPA_PLATFORM=offscreen python -m unittest -q \
-  test_scope_semantic_pipeline test_scope_entities test_scope_objects \
-  test_scope_mapping test_spot_gesture test_spot_gui_offline test_spot_model_view
+  tests.test_scope_semantic_pipeline tests.test_scope_entities tests.test_scope_objects \
+  tests.test_scope_mapping tests.test_spot_gesture tests.test_spot_gui_offline tests.test_spot_model_view
 SCOPE_REAL_DATASET=/path/to/rgbd_dataset_freiburg1_xyz \
   QT_QPA_PLATFORM=offscreen python -m unittest -q \
-  test_scope_semantic_pipeline.RealDetectorIntegrationTests
+  tests.test_scope_semantic_pipeline.RealDetectorIntegrationTests
 ```
 
 The first command passed 36 tests with the optional real-dataset test skipped. The separate real-detector integration test passed with the local TUM recording. The synthetic and recorded-data combined views were opened and reviewed in Rerun; the synthetic view was also checked at large and normal window sizes. No live robot was used for visual verification.

@@ -183,9 +183,9 @@ Local outputs to inspect:
 
 ```sh
 QT_QPA_PLATFORM=offscreen python -m unittest -v \
-  test_scope_memory test_scope_semantic_pipeline test_scope_entities \
-  test_scope_objects test_scope_mapping test_spot_gesture \
-  test_spot_gui_offline test_spot_model_view
+  tests.test_scope_memory tests.test_scope_semantic_pipeline tests.test_scope_entities \
+  tests.test_scope_objects tests.test_scope_mapping tests.test_spot_gesture \
+  tests.test_spot_gui_offline tests.test_spot_model_view
 ```
 
 The final default suite collected **46 tests: 45 passed, one optional real-data test skipped**. The skipped test was enabled against the existing local TUM `freiburg1_xyz` dataset and passed separately:
@@ -193,7 +193,7 @@ The final default suite collected **46 tests: 45 passed, one optional real-data 
 ```sh
 SCOPE_REAL_DATASET=/path/to/rgbd_dataset_freiburg1_xyz \
 QT_QPA_PLATFORM=offscreen python -m unittest -v \
-  test_scope_semantic_pipeline.RealDetectorIntegrationTests
+  tests.test_scope_semantic_pipeline.RealDetectorIntegrationTests
 ```
 
 Coverage includes immutability, evidence/replay, idempotence, explicit transforms, old/new alignment uncertainty, identity/change scenarios, depth/visibility gates, missing-then-returning objects, metrics/retrieval, M1/M2 pipelines, and offline Spot safety/UI/model tests. Geometry-only and semantic-map CLI demos were rerun successfully with five frames at width 96. A previously saved real M2 map was imported and built as one episode with five local/global entities: evidence interoperability, **not independent real-visit identity validation**. The real detector test checks positive projection/fusion. No live Spot evaluation was performed.
