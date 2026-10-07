@@ -69,14 +69,6 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIsNone(interaction.confirmed)
         self.assertIsNone(interaction.proposal)
 
-    def test_go_is_refused_in_robot_control_mode(self):
-        self.target()
-        self.workspace.mode = 'robot_control'
-        self.workspace._publish()
-        self.assertFalse(self.workspace.snapshot()['can_go'])
-        with self.assertRaisesRegex(ValueError, 'not included'):
-            self.action('go', controller='tab')
-
     def test_observe_and_demo_cannot_enable_robot_control(self):
         self.action('mode', mode='observe')
         self.target()

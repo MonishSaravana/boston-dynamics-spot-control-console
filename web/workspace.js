@@ -19,7 +19,7 @@ const modeCopy = {
   dry_run:
     "Full target pipeline. GO records the destination without moving Spot.",
   robot_control:
-    "Command authority required. Manual drive and posture only; GO for the real robot is not included in this version.",
+    "Command authority required. Confirm a target, inspect the destination, then GO.",
 };
 
 async function workspaceAction(name, extra = {}) {
@@ -609,11 +609,11 @@ function updateWorkspace(ws, control) {
   $("go-note").textContent =
     ws.mode === "observe"
       ? "Observe has no movement authorization."
-      : ws.mode === "robot_control"
-        ? "GO for the real robot is not included in this version. Use Dry run."
-        : control.demo
+      : control.demo
         ? "Virtual destination only."
-        : "Exact SE2 pose is recorded. No motion.";
+        : ws.mode === "dry_run"
+          ? "Exact SE2 pose is recorded. No motion."
+          : "Single-use GO. Keep the class E-stop ready.";
   if (ws.mode !== "robot_control" || ws.navigation_active) {
     for (const id of [
       "power-button",
@@ -1265,15 +1265,11 @@ function updateWorkstation(ws, control) {
   const destinationReady = !!ws.destination && ws.can_go && manualReady;
   if (phase === "confirmed") {
     $("target-stage").textContent = destinationReady
-      ? "Confirmed"
-      : ws.mode === "observe" ? "Observe"
-      : ws.mode === "robot_control" ? "Dry run only" : "Refresh required";
+      ? "Confirmed" : ws.mode === "observe" ? "Observe" : "Refresh required";
     $("go-note").textContent = control.failed
       ? "Connection failed. Reconnect before GO."
       : ws.mode === "observe"
         ? "Observe has no movement authorization."
-        : ws.mode === "robot_control"
-          ? "GO for the real robot is not included in this version. Use Dry run."
         : !ws.destination
           ? "Authorization cleared. Refresh before GO."
           : !ws.can_go
@@ -1282,11 +1278,23 @@ function updateWorkstation(ws, control) {
               : "Preview expired. Refresh before GO."
             : control.demo
               ? "Moves the virtual robot."
-              : "Records the exact SE2 command. No motion.";
+              : ws.mode === "dry_run"
+                ? "Records the exact SE2 command. No motion."
+                : "Single-use movement authorization.";
   }
   if (phase === "candidate") $("target-stage").textContent = "Candidate";
   document.querySelector(".destination .section-heading h2").textContent =
     destinationReady ? "Destination ready" : "Review destination";
+  if (
+    ws.mode === "robot_control" &&
+    (!control.connected || !control.armed || control.gesture_active)
+  ) {
+    $("go-button").disabled = true;
+    $("target-stage").textContent = "Readiness required";
+    $("go-note").textContent = control.failed
+      ? "Connection failed. Reconnect before GO."
+      : "Power and confirm standing state before GO.";
+  }
   $("live-world-title").textContent = ws.destination
     ? "Destination / top view"
     : "World / top view";

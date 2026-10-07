@@ -53,7 +53,7 @@ Then start the default dry-run console using a source name from that report:
 .venv/bin/python -m scope.m5_console --spot ROBOT_IP --visual-source VISUAL_SOURCE
 ```
 
-Camera acquisition and query overlays can run without depth. Mapping and destination generation require a measured aligned depth pair, calibration, source timestamps, and odom transforms. The console refuses RGB-D geometry until the operator has checked alignment on the robot and explicitly passes `--depth-source DEPTH_SOURCE --alignment-verified`. Spot GO records `WOULD_EXECUTE_NO_MOTION` and sends no command. `--supervised-go` exists only on `codex/m5-live-spot-interaction` and exits with an error here. See [the M5 checklist](milestone-5.md) for the ordered validation procedure and remaining limits.
+Camera acquisition and query overlays can run without depth. Mapping and destination generation require a measured aligned depth pair, calibration, source timestamps, and odom transforms. The console refuses RGB-D geometry until the operator has checked alignment on the robot and explicitly passes `--depth-source DEPTH_SOURCE --alignment-verified`. Without `--supervised-go`, Spot GO records `WOULD_EXECUTE_NO_MOTION` and sends no command. `--supervised-go` takes a command lease and sends the same odom-frame trajectory as the browser's Robot control GO; it requires `--alignment-verified` and cannot run while another console holds the lease. See [the M5 checklist](milestone-5.md) for the ordered validation procedure and remaining limits.
 
 ## Run with the class E-stop
 
