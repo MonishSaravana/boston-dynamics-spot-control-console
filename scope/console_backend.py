@@ -370,16 +370,17 @@ class SpotBackend:
 
 
 def world_picture(mapping, entities, robot, proposal, selected, size=420):
-    image = Image.new("RGB", (size, size), "#14212b")
+    image = Image.new("RGB", (size, size), "#070808")
     draw = ImageDraw.Draw(image)
     if mapping is None:
-        draw.text((20, 20), "Map unavailable", fill="#d4e1e7")
+        draw.text((20, 20), "Map unavailable", fill="#9ba3a8")
         return image
     state = mapping.topdown()
     cfg = mapping.config
     sx = size/state.shape[0]
     sy = size/state.shape[1]
-    colors = {0: "#25333c", 1: "#3d5857", 2: "#99583e"}
+    # Same palette as the browser map: unknown, observed free, occupied.
+    colors = {0: "#070808", 1: "#16191b", 2: "#3b4347"}
     for i in range(state.shape[0]):
         for j in range(state.shape[1]):
             x, y = i*sx, size-(j+1)*sy
@@ -390,14 +391,14 @@ def world_picture(mapping, entities, robot, proposal, selected, size=420):
     for entity in entities:
         low, high = entity["bounds_low_m"], entity["bounds_high_m"]
         p1, p2 = pixel(low[0], low[1]), pixel(high[0], high[1])
-        color = "#f7d26c" if selected and entity["entity_id"] == selected.entity_id else "#a5c7d4"
+        color = "#f0b44c" if selected and entity["entity_id"] == selected.entity_id else "#9ba3a8"
         draw.rectangle((p1[0], p2[1], p2[0], p1[1]), outline=color, width=3)
         draw.text((p1[0], p2[1]-15), entity["entity_id"], fill=color)
     if proposal:
         route = [pixel(x, y) for x, y in proposal.route_xy_m]
-        draw.line(route, fill="#79d7a0", width=3)
+        draw.line(route, fill="#3ecf9b", width=3)
         x, y = pixel(proposal.x_m, proposal.y_m)
-        draw.ellipse((x-7, y-7, x+7, y+7), fill="#79d7a0")
+        draw.ellipse((x-7, y-7, x+7, y+7), fill="#3ecf9b")
     if robot:
         x, y = pixel(robot.x_m, robot.y_m)
         draw.ellipse((x-7, y-7, x+7, y+7), fill="#ffffff")

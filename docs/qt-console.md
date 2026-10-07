@@ -39,7 +39,7 @@ The browser console has the same workflow. This is the original Qt version. It r
 .venv/bin/python -m scope.m5_console --demo
 ```
 
-Type `chair`, select one of the two candidates, press **CONFIRM TARGET**, inspect the highlighted object and proposed route, then press **GO · virtual**. **Simulate pointing** and direct entity selection use the same confirmation path. Synthetic images and map geometry are test fixtures, not Spot captures.
+Type `chair`, select one of the two candidates, press **Confirm target**, inspect the highlighted object and proposed route, then press **GO · virtual**. **Simulate pointing** and direct entity selection use the same confirmation path. Synthetic images and map geometry are test fixtures, not Spot captures.
 
 To inspect physical image sources without a lease or movement, run:
 
@@ -87,7 +87,7 @@ These instructions describe the Qt manual console. The browser has the same manu
 
 ### Cameras and panorama
 
-The default dashboard shows Camera, Robot Model, and Controls together. Drag a panel title to move it, drag the divider to resize it, or use its title-bar buttons to float or hide it. The **Panels and layout** menu in the header restores hidden panels and offers **Balanced**, **Camera Focus**, **Model Focus**, and **Restore Default Layout**. Your arrangement is saved when the window closes. Stop and connection status stay visible above the panels. The Camera panel's **View** selector changes feeds, split screen, and panorama without replacing the robot model.
+The default dashboard shows Camera, Robot model, and Controls together. Drag a panel title to move it, drag the divider to resize it, or use its title-bar buttons to float or hide it. The **Layout** menu in the top bar restores hidden panels and offers **Balanced**, **Camera Focus**, **Model Focus**, and **Restore Default Layout**. Your arrangement is saved when the window closes. Stop and connection status stay visible above the panels. The Camera panel's **View** selector changes feeds, split screen, and panorama without replacing the robot model.
 
 | View | What it shows |
 | --- | --- |

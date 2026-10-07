@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QFrame, QGridLayout, QHB
 from spot_demo import make_demo_frames, make_demo_panorama
 from spot_gesture import GestureGate, GestureVision, MODEL_DIR, Observation
 from spot_model_view import SpotModelView, hardware_matches_base
+from scope.qt_theme import COLORS, STYLE as GUI_STYLE, nav_label
 
 
 DEFAULT_SPEED = 0.20  # m/s, slower than the SDK WASD example's 0.5 m/s
@@ -53,53 +54,6 @@ KEYS = {Qt.Key_W: (1, 0), Qt.Key_Up: (1, 0),
         Qt.Key_A: (0, 1), Qt.Key_Left: (0, 1),
         Qt.Key_D: (0, -1), Qt.Key_Right: (0, -1)}
 
-GUI_STYLE = """
-QMainWindow, QWidget#root { background: #f2f5f7; color: #172735; }
-QFrame#header, QFrame#surface, QFrame#controlPanel, QFrame#statusBar {
-    background: #ffffff; border: 1px solid #dce3e8; border-radius: 10px;
-}
-QLabel { color: #172735; }
-QLabel#appTitle { color: #162b39; font-size: 20px; font-weight: 700; }
-QLabel#sectionTitle { color: #162b39; font-size: 15px; font-weight: 700; }
-QLabel#muted { color: #526574; font-size: 12px; }
-QLabel#stateTitle { color: #162b39; font-weight: 700; }
-QLabel#cameraStatus { color: #526574; font-size: 12px; }
-QFrame#stateDot { border: none; border-radius: 5px; background: #9aa8b2; }
-QPushButton { background: #ffffff; color: #172735; border: 1px solid #becbd4;
-              border-radius: 6px; padding: 9px 12px; font-weight: 600; }
-QPushButton:hover { background: #ecf4f5; border-color: #0b747b; }
-QPushButton:focus { border: 2px solid #0b747b; }
-QPushButton:disabled { color: #8998a2; background: #f2f4f5; border-color: #e2e7ea; }
-QPushButton#stopButton { background: #ae2630; border-color: #91202a; color: white;
-                         font-size: 15px; font-weight: 700; padding: 13px 18px; }
-QPushButton#stopButton:hover { background: #951e28; }
-QPushButton#stopButton:focus { border: 2px solid #172735; }
-QPushButton#applyButton { background: #0b747b; border-color: #08626a; color: white; }
-QPushButton#applyButton:hover { background: #08626a; }
-QPushButton#applyButton:disabled { background: #dce7e8; border-color: #dce7e8;
-                                  color: #71878a; }
-QToolButton { background: #ffffff; color: #172735; border: 1px solid #becbd4;
-              border-radius: 6px; padding: 10px 12px; font-weight: 600; }
-QToolButton:hover { background: #ecf4f5; border-color: #0b747b; }
-QComboBox { background: #ffffff; color: #172735; border: 1px solid #becbd4;
-            border-radius: 6px; padding: 6px 8px; }
-QComboBox QAbstractItemView { background: #ffffff; color: #172735;
-                              selection-background-color: #dfe9eb; }
-QTabWidget::pane { border: 1px solid #dce3e8; background: #ffffff; }
-QTabBar::tab { background: #edf2f4; color: #405563; padding: 9px 13px;
-               border: 1px solid #dce3e8; border-bottom: none; }
-QTabBar::tab:selected { background: #ffffff; color: #0b6871; font-weight: 700; }
-QTabBar::tab:hover:!selected { background: #dfe9eb; }
-QScrollArea { border: none; background: transparent; }
-QCheckBox { color: #172735; spacing: 8px; }
-QSlider { min-height: 22px; }
-QSlider::groove:horizontal { height: 6px; background: #d4e0e5; border-radius: 3px; }
-QSlider::sub-page:horizontal { background: #0b747b; border-radius: 3px; }
-QSlider::handle:horizontal { width: 16px; margin: -6px 0; background: #ffffff;
-                             border: 1px solid #0b747b; border-radius: 8px; }
-QDockWidget { color: #162b39; font-weight: 700; }
-QDockWidget::title { background: #e9eff2; padding: 7px 10px; }
-"""
 
 
 def decode_visual_image(image):
@@ -712,7 +666,7 @@ class CameraImageLabel(QLabel):
         self.setMinimumSize(*minimum_size)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet('background: #15212a; color: #d9e4e8; border-radius: 5px;')
+        self.setStyleSheet(f"background: {COLORS['canvas']}; color: {COLORS['muted']};")
         self._source_pixmap = None
 
     def set_picture(self, picture):
@@ -738,10 +692,10 @@ class PanoramaView(QGraphicsView):
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.setBackgroundBrush(Qt.black)
+        self.setBackgroundBrush(QColor(COLORS['canvas']))
         self.pixmap_item = None
         message = self.scene.addText('Waiting for front camera frames and alignment…')
-        message.setDefaultTextColor(QColor('#d9e4e8'))
+        message.setDefaultTextColor(QColor(COLORS['muted']))
 
     def set_picture(self, picture):
         pixmap = QPixmap.fromImage(ImageQt(picture))
@@ -760,9 +714,9 @@ class PanoramaView(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self, hostname, offline=False, demo=False):
         super().__init__()
-        self.setWindowTitle('Spot Control Console — DEMO' if demo else
-                            'Spot Control Console — OFFLINE PREVIEW' if offline else
-                            f'Spot Control Console — {hostname}')
+        self.setWindowTitle('SCOPE · Manual control — DEMO' if demo else
+                            'SCOPE · Manual control — OFFLINE PREVIEW' if offline else
+                            f'SCOPE · Manual control — {hostname}')
         self.resize(1240, 820)
         self.setMinimumSize(1040, 620)
         self.setStyleSheet(GUI_STYLE)
@@ -782,30 +736,38 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root.setObjectName('root')
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
+        # Top bar mirrors the browser console: brand, mode, layout, Stop.
         header = QFrame()
-        header.setObjectName('header')
+        header.setObjectName('topbar')
         header_row = QHBoxLayout(header)
-        header_row.setContentsMargins(18, 12, 18, 12)
-        heading = QVBoxLayout()
-        app_title = QLabel('Spot Control Console')
-        app_title.setObjectName('appTitle')
-        heading.addWidget(app_title)
-        sub = QLabel('Built-in cameras, keyboard drive, and standing posture')
-        sub.setObjectName('muted')
-        heading.addWidget(sub)
-        header_row.addLayout(heading, 1)
+        header_row.setContentsMargins(18, 10, 14, 10)
+        header_row.setSpacing(14)
+        brand = QLabel('◎  SCOPE')
+        brand.setObjectName('brand')
+        header_row.addWidget(brand)
+        header_row.addWidget(nav_label('Manual control'))
+        header_row.addStretch(1)
+        self.mode_pill = QLabel('OFFLINE DEMO' if demo else 'OFFLINE PREVIEW' if offline else
+                                f'SPOT · {hostname}')
+        self.mode_pill.setObjectName('modePill')
+        header_row.addWidget(self.mode_pill)
         self.layout_button = QToolButton()
-        self.layout_button.setText('Panels and layout')
+        self.layout_button.setObjectName('quiet')
+        self.layout_button.setText('Layout')
         self.layout_button.setPopupMode(QToolButton.InstantPopup)
         self.layout_menu = QMenu(self.layout_button)
         self.layout_button.setMenu(self.layout_menu)
         header_row.addWidget(self.layout_button)
-        self.stop = QPushButton('STOP MOVEMENT')
+        stop_note = QLabel('Zero-velocity request\nClass E-stop separate')
+        stop_note.setObjectName('stopNote')
+        stop_note.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        header_row.addWidget(stop_note)
+        self.stop = QPushButton('■  STOP MOVEMENT')
         self.stop.setObjectName('stopButton')
-        self.stop.setMinimumWidth(205)
+        self.stop.setMinimumWidth(180)
         self.stop.setToolTip('Immediately request zero velocity and clear held keys and gesture mode. '
                              'The separate class E-stop remains required.')
         self.stop.clicked.connect(self.stop_motion)
@@ -814,28 +776,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(header)
 
         status_bar = QFrame()
-        status_bar.setObjectName('statusBar')
+        status_bar.setObjectName('statusStrip')
         status_row = QHBoxLayout(status_bar)
-        status_row.setContentsMargins(16, 9, 16, 9)
+        status_row.setContentsMargins(18, 8, 18, 8)
+        status_row.setSpacing(10)
         self.state_dot = QFrame()
         self.state_dot.setObjectName('stateDot')
-        self.state_dot.setFixedSize(10, 10)
+        self.state_dot.setFixedSize(8, 8)
         status_row.addWidget(self.state_dot)
-        status_text = QVBoxLayout()
-        status_text.setSpacing(2)
         self.state_title = QLabel()
         self.state_title.setObjectName('stateTitle')
-        status_text.addWidget(self.state_title)
+        status_row.addWidget(self.state_title)
         self.status = QLabel()
         self.status.setObjectName('muted')
         self.status.setWordWrap(True)
-        status_text.addWidget(self.status)
-        status_row.addLayout(status_text, 1)
-        estop = QLabel('Keep the class E-stop open in a separate Terminal')
-        estop.setObjectName('muted')
-        estop.setWordWrap(True)
-        estop.setMaximumWidth(245)
-        status_row.addWidget(estop)
+        status_row.addWidget(self.status, 1)
         layout.addWidget(status_bar)
 
         self.dock_host = QMainWindow()
@@ -847,9 +802,6 @@ class MainWindow(QMainWindow):
         camera_layout = QVBoxLayout(camera_surface)
         camera_layout.setContentsMargins(16, 14, 16, 16)
         camera_layout.setSpacing(8)
-        camera_title = QLabel('Built-in cameras')
-        camera_title.setObjectName('sectionTitle')
-        camera_layout.addWidget(camera_title)
         camera_intro = QLabel('Choose a camera, all feeds, or an approximate front stitch.')
         camera_intro.setObjectName('muted')
         camera_intro.setWordWrap(True)
@@ -872,9 +824,6 @@ class MainWindow(QMainWindow):
         model_layout = QVBoxLayout(model_surface)
         model_layout.setContentsMargins(16, 12, 16, 12)
         model_layout.setSpacing(6)
-        model_title = QLabel('Robot geometry')
-        model_title.setObjectName('sectionTitle')
-        model_layout.addWidget(model_title)
         model_note = QLabel('Read-only SDK model. Drag to orbit or pan; scroll to zoom. '
                             'Legs update only from fresh telemetry with a matching skeleton.')
         model_note.setObjectName('muted')
@@ -892,7 +841,7 @@ class MainWindow(QMainWindow):
         control_layout.setSpacing(10)
         controls_scroll.setWidget(control_panel)
         self.camera_dock = self._make_dock('Camera', 'cameraDock', camera_surface)
-        self.model_dock = self._make_dock('Robot Model', 'modelDock', model_surface)
+        self.model_dock = self._make_dock('Robot model', 'modelDock', model_surface)
         self.controls_dock = self._make_dock('Controls', 'controlsDock', controls_scroll)
         self.controls_dock.setMinimumWidth(320)
         self._build_layout_menu()
@@ -1014,9 +963,21 @@ class MainWindow(QMainWindow):
         control_layout.addWidget(self.gesture_toggle)
         self.gesture_indicator = QLabel('GESTURE MODE OFF')
         self.gesture_indicator.setWordWrap(True)
-        self.gesture_indicator.setStyleSheet('color: #a65b00; font-weight: 600;')
+        self.gesture_indicator.setStyleSheet(f"color: {COLORS['target']}; font-weight: 600;")
         control_layout.addWidget(self.gesture_indicator)
         control_layout.addStretch(1)
+
+        footer = QFrame()
+        footer.setObjectName('footer')
+        footer_row = QHBoxLayout(footer)
+        footer_row.setContentsMargins(18, 6, 18, 6)
+        footer_text = QLabel('Keep the class E-stop open in a separate Terminal')
+        footer_text.setObjectName('footerText')
+        footer_row.addWidget(footer_text, 1)
+        affiliation = QLabel('Independent project · Boston Dynamics not affiliated')
+        affiliation.setObjectName('footerText')
+        footer_row.addWidget(affiliation)
+        layout.addWidget(footer)
         self.setCentralWidget(root)
 
         self.power.setEnabled(False)
@@ -1115,24 +1076,24 @@ class MainWindow(QMainWindow):
 
     def _set_connection_state(self, state):
         states = {
-            'connecting': ('Connecting to Spot', '#b7791f',
+            'connecting': ('Connecting to Spot', COLORS['target'],
                            'Authenticating and discovering built-in cameras. Watch Terminal for prompts.'),
-            'connected': ('Connected • not standing', '#b7791f',
+            'connected': ('Connected • not standing', COLORS['target'],
                           'Use Power On if needed, then Stand to unlock keyboard movement.'),
-            'powered': ('Powered • stand required', '#b7791f',
+            'powered': ('Powered • stand required', COLORS['target'],
                         'Press Stand before using the keyboard or applying posture.'),
-            'ready': ('Standing confirmed • keyboard unlocked', '#08756e',
+            'ready': ('Standing confirmed • keyboard unlocked', COLORS['accent'],
                       'Hold a direction key to move; release it to request zero velocity.'),
-            'failed': ('Disconnected • movement disabled', '#b4232a',
+            'failed': ('Disconnected • movement disabled', COLORS['stop'],
                        'Connection lost. Use the separate class E-stop if needed.'),
-            'offline': ('Offline posture preview', '#566b7a',
+            'offline': ('Offline posture preview', COLORS['subtle'],
                         'No robot connection, commands, or camera imagery.'),
-            'demo': ('Offline demo • simulated camera scenes', '#566b7a',
+            'demo': ('Offline demo • simulated camera scenes', COLORS['subtle'],
                      'No robot connection or commands. Camera imagery is original grayscale test artwork.'),
         }
         title, color, detail = states[state]
         self.state_title.setText(title)
-        self.state_dot.setStyleSheet(f'background: {color}; border: none; border-radius: 5px;')
+        self.state_dot.setStyleSheet(f'background: {color}; border: none; border-radius: 4px;')
         self.status.setText(detail)
 
     def _start_demo(self):
@@ -1318,8 +1279,8 @@ class MainWindow(QMainWindow):
         self.speed.setEnabled(not enabled)
         self.stand.setEnabled(self.armed and not enabled)
         self.gesture_indicator.setStyleSheet(
-            'color: #b22; font-weight: bold;' if not enabled else
-            'color: #a65b00; font-weight: bold;')
+            f"color: {COLORS['error']}; font-weight: 600;" if not enabled else
+            f"color: {COLORS['target']}; font-weight: 600;")
 
     def show_gesture_info(self, message):
         self.gesture_indicator.setText(message)
@@ -1329,7 +1290,7 @@ class MainWindow(QMainWindow):
         self.gesture_toggle.setChecked(False)
         self.gesture_toggle.blockSignals(False)
         self.gesture_indicator.setText(f'GESTURE MODE OFF — {message}')
-        self.gesture_indicator.setStyleSheet('color: #a65b00; font-weight: 600;')
+        self.gesture_indicator.setStyleSheet(f"color: {COLORS['target']}; font-weight: 600;")
         self.apply_button.setEnabled(self.ready and self.armed and not self.failed)
         self.speed.setEnabled(True)
         self.stand.setEnabled(self.ready and self.armed and not self.failed)
