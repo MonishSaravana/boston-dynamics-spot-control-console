@@ -1,6 +1,6 @@
 # Boston Dynamics Spot Control Console (SCOPE)
 
-**SCOPE** (Spot Control, Observation, and Preview Environment) is an independent local Spot console. The primary browser app brings cameras, manual controls, target selection, destination preview and explicit GO into **Operate**, with **Maps**, **Runs** and **Evaluate** for inspection and existing offline tools. It shares the existing Qt console's perception and target adapters. Advanced point clouds, human skeletons, pointing rays, memory and timelines remain in Rerun.
+**SCOPE** (Spot Control, Observation, and Preview Environment) is an independent local Spot console. The primary browser app brings cameras, manual controls, target selection, destination preview and explicit GO into **Live**, with **World**, **History** and **Debug** for inspection and existing offline tools. It shares the existing Qt console's perception and target adapters. Advanced point clouds, human skeletons, pointing rays, memory and timelines remain in Rerun.
 
 The offline demo runs a synthetic room and virtual robot without connecting to Spot. Observe uses read-only Spot sensors; Dry run records the proposed destination without sending a movement command. Robot control requires an explicitly authorized connection and the separate class E-stop. The browser command path and M5 target-to-GO workflow have not been validated on a physical robot. **M5 remains READY FOR PHYSICAL VALIDATION** on `codex/m5-live-spot-interaction`.
 
@@ -116,13 +116,25 @@ The server opens a local `http://127.0.0.1` address. For a fixed port or an addi
 .venv/bin/python scope_web.py --demo --port 8766 --runs-dir runs --runs-dir /path/to/other/runs
 ```
 
-In **Operate**, type `chair`, select a candidate, confirm it, inspect destination coordinates, heading, standoff and route, then press **GO · virtual**. Simulate pointing and **Maps → select entity → Use as target** enter the same workflow. GO consumes its preview; another GO requires a fresh preview. Camera evidence and map geometry in demo mode are synthetic fixtures. Power, Stand, manual drive, posture Apply and physical gestures stay disabled. The optional SDK mesh is labeled simulated.
+In **Live**, type `chair`, select a candidate, confirm it, inspect destination coordinates, heading, standoff and route, then press **GO**. In demo mode GO moves only the virtual robot. Simulate pointing and **World → select entity → Use as target** enter the same workflow. GO consumes its preview; another GO requires a fresh preview. Camera evidence and map geometry in demo mode are synthetic fixtures. Power, Stand, manual drive, posture Apply and physical gestures stay disabled. The optional SDK mesh is labeled simulated.
 
-The **Robot model** panel draws the SDK base URDF from the local `spot-sdk/files/spot_base_urdf.zip`; the server reads it at runtime and the repository does not contain the meshes. **Measured** follows the 12 leg joint angles that the command session reports from fresh robot telemetry, after the robot's skeleton matches the SDK base model. Body attitude is not measured here, so the model is drawn level with its lowest foot on the grid. In demo mode it shows the URDF zero configuration, labeled simulated. **Pose preview** is local: drag a leg to rotate the joint that drives it, drag the body to change yaw and pitch (Alt-drag for roll), or type values. Body height, roll, pitch and yaw keep the feet planted with an approximate inverse-kinematics solve; the Stand pose uses an assumed 0.52 m body height, not a measured one. Joint inputs are limited to the URDF ranges. Nothing in the preview is sent to Spot. **Copy height, roll & pitch to posture request** fills the existing posture sliders, clamped to the app limits (0–10 cm, ±5°); yaw stays preview-only, and Apply keeps its Stand and stationary checks.
+The screenshots below are the browser console in offline demo mode at 1440 × 900. The lab photo is the generated visual fixture in `web/fixtures/`, not a Spot capture, and the robot model shows the SDK URDF rather than measured robot state.
 
-Panels in Live and World can be rearranged: drag a panel bar onto another panel's edge to split it, onto its centre to swap, or onto the workspace edge to dock along it. Drag the dividers to resize. **Layout** shows or hides panels and resets the arrangement, which is saved per browser. Dragging or resizing clears any held movement. Below 650 px wide, panels stack in a fixed order.
+![Live page with a confirmed chair target, destination preview and the robot model panel](docs/browser-live-destination.png)
 
-**Maps** shows current occupancy, entities, robot pose and destination. **Advanced 3D / Rerun** gives the existing viewer workflow. **Runs** indexes the latest 500 local map, memory, result and recording artifacts in configured directories, supports read-only inspection, and opens `.rrd` recordings in Rerun. **Evaluate** provides copyable existing benchmark commands, current module health and the original consoles/CLIs.
+The **Robot model** panel draws the SDK base URDF from the local `spot-sdk/files/spot_base_urdf.zip`. The server reads the zip at runtime; the meshes are not in this repository. **Measured** shows the 12 leg joint angles reported by fresh robot telemetry. Those angles only arrive with a Robot control connection, and only when the robot's skeleton matches the SDK base model. Body attitude is not measured here, so the model is drawn level with its lowest foot on the grid. In demo mode it shows the URDF zero configuration, labeled simulated.
+
+**Pose preview** is local and sends nothing to Spot. Drag a leg to rotate the joint that drives it, drag the body to change yaw and pitch (Alt-drag for roll), or type values. Changing body height, roll, pitch or yaw re-solves each leg so the feet stay where they were. The solve is approximate, and the **Stand** pose assumes a 0.52 m body height that was not measured on a robot. Joint inputs are limited to the URDF ranges, and the measured pose stays visible as a ghost for comparison. **Copy height, roll & pitch to posture request** fills the existing posture sliders, clamped to the app limits (0–10 cm, ±5°). Yaw is preview-only. Apply keeps its Stand and stationary checks.
+
+![Pose preview with the body rolled, pitched and yawed, the front-left knee selected, and the Robot tab open](docs/browser-pose-preview.png)
+
+Panels in Live and World can be rearranged. Drag a panel bar onto another panel's edge to split it, onto its center to swap the two, or onto the edge of the workspace to dock along it. Drag the dividers to resize. **Layout** shows or hides panels and resets the arrangement; the arrangement is saved in the browser. Starting a drag or resize clears any held movement. Below 650 px wide, panels stack in a fixed order and cannot be dragged.
+
+![Robot model panel being dragged below the inspector, with the drop zone highlighted](docs/browser-panel-docking.png)
+
+**World** shows current occupancy, entities, robot pose and destination. **Advanced 3D / Rerun** gives the existing viewer workflow. **History** indexes the latest 500 local map, memory, result and recording artifacts in configured directories, supports read-only inspection, and opens `.rrd` recordings in Rerun. **Debug** provides copyable existing benchmark commands, current module health and the original consoles/CLIs.
+
+![World page with scene layers, the occupancy map and a selected chair entity](docs/browser-world.png)
 
 For the live connection form:
 
@@ -166,7 +178,7 @@ In the E-stop Terminal, **Space** triggers the E-stop, **r** releases it, and **
 
 ## Controls and views
 
-The following dock/layout instructions describe the retained Qt manual console. The browser provides the same manual requests beneath Operate and uses its four-page shell.
+The following dock/layout instructions describe the retained Qt manual console. The browser has the same manual requests in the **Robot** tab of the Live inspector.
 
 ### Cameras and panorama
 
