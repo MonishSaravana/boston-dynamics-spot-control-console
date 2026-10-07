@@ -1,8 +1,9 @@
 # SCOPE workstation
 
-This pass joins the existing interfaces on `codex/m5-live-spot-interaction`.
-It adds no model, fusion system or planner. M5 remains **READY FOR PHYSICAL
-VALIDATION**. No physical Spot was connected or commanded during this pass.
+This pass joins the existing interfaces. It adds no model, fusion system or
+planner. The supervised GO executor is only on `codex/m5-live-spot-interaction`
+and is **READY FOR PHYSICAL VALIDATION**. No physical Spot was connected or
+commanded during this pass.
 
 ## Launch
 
@@ -58,7 +59,7 @@ Observe authenticates only images/state, with no command lease. Dry run
 records the proposed SE2 destination and sends no movement command. Robot
 control requires an explicitly authorized connection and the separate
 class E-stop. It reuses the manual SpotSession's SDK command client and
-lease for the existing supervised executor. Changing modes stops motion;
+lease for manual drive and posture; GO is disabled in this mode. Changing modes stops motion;
 an already acquired command lease remains until Disconnect. Reconnect in
 Observe for a connection that has no command authority.
 
@@ -169,10 +170,9 @@ when they cannot fit safely, retaining world markers and inspector coordinates.
 Stop advances the command epoch before waiting for perception. It clears
 held inputs, gesture mode, navigation ownership and confirmation. Focus
 loss, hidden tabs, failed connections and shutdown request zero velocity.
-The browser heartbeat expires after 0.30 s, manual commands after 0.35 s,
-and existing supervised trajectory commands after 0.75 s. GO performs the
-existing fresh target, robot, geometry, route and single-use checks. A
-queued or in-progress manual request blocks final navigation dispatch.
+The browser heartbeat expires after 0.30 s and manual commands after 0.35 s.
+GO (demo and Dry run only) performs the existing fresh target, geometry,
+route and single-use checks.
 The class E-stop remains a separate process; GUI Stop is a zero-velocity
 request, not an E-stop.
 

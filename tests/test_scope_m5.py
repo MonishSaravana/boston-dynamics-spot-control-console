@@ -10,7 +10,6 @@ from scope.live_interaction import (
     candidates_from_pointing, candidates_from_query, direct_candidate)
 from scope.mapping import MapConfig, VoxelMap
 from scope.spot_live_source import SpotImage, SpotReadOnlySource, pair_to_frame
-from scope.spot_navigation import SpotTrajectoryExecutor
 
 
 def free_map():
@@ -255,72 +254,6 @@ class SpotNormalizationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scale"):
             pair_to_frame(replace(visual, T_root_sensor=np.eye(4)), depth,
                           alignment_verified=True)
-
-
-class NavigationTests(unittest.TestCase):
-    def test_stop_before_dispatch_sends_no_trajectory(self):
-        class Client:
-            def __init__(self): self.sent = []
-            def robot_command(self, **kw):
-                self.sent.append(kw["command"])
-                return len(self.sent)
-        client = Client()
-        executor = SpotTrajectoryExecutor(client,
-            lambda: RobotPose(-2., 0., 0., 10., "odom"), lambda _: True,
-            enabled=True, clock=lambda: 10.)
-        session = InteractionSession(VirtualExecutor(), clock=lambda: 10.)
-        session.offer([candidate(10.)]); session.confirm()
-        destination = session.propose(RobotPose(-2., 0., 0., 10., "odom"), free_map())
-        executor.stop()
-        with self.assertRaisesRegex(InteractionError, "Stop requested"):
-            executor.execute(destination)
-        self.assertTrue(client.sent)
-        self.assertTrue(all(cmd.synchronized_command.mobility_command.HasField("se2_velocity_request")
-                            for cmd in client.sent))
-
-    def test_sdk_adapter_is_disabled_until_commissioned(self):
-        class Client:
-            calls = 0
-            def robot_command(self, **kwargs):
-                self.calls += 1
-        client = Client()
-        executor = SpotTrajectoryExecutor(client, lambda: None, lambda _: True)
-        with self.assertRaisesRegex(InteractionError, "disabled"):
-            executor.execute(object())
-        self.assertEqual(client.calls, 0)
-
-    def test_sdk_trajectory_has_short_expiry_speed_limit_and_zero(self):
-        from types import SimpleNamespace as Obj
-        from bosdyn.api import basic_command_pb2
-        proposal_session = InteractionSession(VirtualExecutor(), clock=lambda: 10.)
-        proposal_session.offer([candidate(10.)])
-        proposal_session.confirm()
-        destination = proposal_session.propose(RobotPose(-2., 0., 0., 10., "odom"), free_map())
-        class Client:
-            def __init__(self): self.sent = []
-            def robot_command(self, **kw):
-                self.sent.append(kw)
-                return len(self.sent)
-            def robot_command_feedback(self, *args, **kw):
-                traj = Obj(status=1, STATUS_AT_GOAL=1,
-                           body_movement_status=2, BODY_STATUS_SETTLED=2)
-                mobility = Obj(status=basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING,
-                               se2_trajectory_feedback=traj)
-                return Obj(feedback=Obj(synchronized_feedback=Obj(mobility_command_feedback=mobility)))
-        client = Client()
-        clock = lambda: 10.
-        executor = SpotTrajectoryExecutor(client,
-            lambda: RobotPose(destination.x_m, destination.y_m,
-                              destination.yaw_rad, 10., "odom"), lambda _: True,
-            enabled=True, clock=clock)
-        self.assertEqual(executor.execute(destination), "ARRIVED_MEASURED_FEEDBACK")
-        self.assertEqual(len(client.sent), 2)
-        command = client.sent[0]["command"]
-        request = command.synchronized_command.mobility_command.se2_trajectory_request
-        self.assertEqual(request.se2_frame_name, "odom")
-        self.assertAlmostEqual(request.trajectory.points[0].pose.position.x, destination.x_m)
-        self.assertLess(client.sent[0]["end_time_secs"]-time.time(), 1.)
-        self.assertTrue(client.sent[1]["command"].synchronized_command.mobility_command.HasField("se2_velocity_request"))
 
 
 class ConsoleIntegrationTests(unittest.TestCase):

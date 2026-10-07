@@ -2,7 +2,7 @@
 
 **SCOPE** (Spot Control, Observation, and Preview Environment) is an independent local Spot console. The primary browser app brings cameras, manual controls, target selection, destination preview and explicit GO into **Live**, with **World**, **History** and **Debug** for inspection and existing offline tools. It shares the existing Qt console's perception and target adapters. Advanced point clouds, human skeletons, pointing rays, memory and timelines remain in Rerun.
 
-The offline demo runs a synthetic room and virtual robot without connecting to Spot. Observe uses read-only Spot sensors; Dry run records the proposed destination without sending a movement command. Robot control requires an explicitly authorized connection and the separate class E-stop. The browser command path and M5 target-to-GO workflow have not been validated on a physical robot. **M5 remains READY FOR PHYSICAL VALIDATION** on `codex/m5-live-spot-interaction`.
+The offline demo runs a synthetic room and virtual robot without connecting to Spot. Observe uses read-only Spot sensors; Dry run records the proposed destination without sending a movement command. Robot control requires an explicitly authorized connection and the separate class E-stop, and it covers manual drive and posture only. This branch has no code that sends GO movement commands to Spot; GO works in the offline demo (virtual robot) and Dry run (recorded, not sent). The version with a supervised GO executor is on `codex/m5-live-spot-interaction`, and it has not been tried on a physical robot (**READY FOR PHYSICAL VALIDATION**).
 
 The front panorama is an approximate stitch. Model geometry uses measured joints when fresh telemetry is available; posture sliders specify requested offsets. Synthetic images are fixtures, not Spot captures. SCOPE is not an official or endorsed Boston Dynamics product. See [the unified console guide](docs/unified-console.md) for workflows, preserved tools and verification limits.
 
@@ -80,7 +80,7 @@ The rest of the GUI runs without them; gesture mode cannot start if they are mis
 
 ## Target interaction preview
 
-The primary browser exposes this same workflow; start it with `.venv/bin/python scope_web.py --demo`. The original Qt M5 console remains available on `codex/m5-live-spot-interaction` while physical validation is pending:
+The primary browser exposes this same workflow; start it with `.venv/bin/python scope_web.py --demo`. The original Qt M5 console is still here. It runs the demo and the dry-run path:
 
 ```sh
 .venv/bin/python -m scope.m5_console --demo
@@ -100,7 +100,7 @@ Then start the default dry-run console using a source name from that report:
 .venv/bin/python -m scope.m5_console --spot ROBOT_IP --visual-source VISUAL_SOURCE
 ```
 
-Camera acquisition and query overlays can run without depth. Mapping and destination generation require a measured aligned depth pair, calibration, source timestamps, and odom transforms. The console refuses RGB-D geometry until the operator has checked alignment on the robot and explicitly passes `--depth-source DEPTH_SOURCE --alignment-verified`. Default Spot GO records `WOULD_EXECUTE_NO_MOTION` and sends no command. A separate `--supervised-go` option is reserved for the final physical gate after the class E-stop, geometry, target, route, and dry-run checks. See [the M5 checklist](docs/milestone-5.md) for the ordered validation procedure and remaining limits.
+Camera acquisition and query overlays can run without depth. Mapping and destination generation require a measured aligned depth pair, calibration, source timestamps, and odom transforms. The console refuses RGB-D geometry until the operator has checked alignment on the robot and explicitly passes `--depth-source DEPTH_SOURCE --alignment-verified`. Spot GO records `WOULD_EXECUTE_NO_MOTION` and sends no command. `--supervised-go` exists only on `codex/m5-live-spot-interaction` and exits with an error here. See [the M5 checklist](docs/milestone-5.md) for the ordered validation procedure and remaining limits.
 
 ## Local browser console
 
@@ -142,13 +142,13 @@ For the live connection form:
 .venv/bin/python scope_web.py
 ```
 
-Observe is the default: authenticate read-only sensors without taking a command lease. Dry run uses the same target/destination pipeline and records the exact SE2 destination, with no movement command. Robot control requires selecting that mode in the connection form and explicitly granting command authority after starting the class E-stop. Manual controls and supervised GO share the existing command session and lease. Returning to Observe or Dry run stops movement but retains an existing command connection until **Disconnect** returns its lease; reconnect in Observe for a sensor-only session.
+Observe is the default: authenticate read-only sensors without taking a command lease. Dry run uses the same target/destination pipeline and records the exact SE2 destination, with no movement command. Robot control requires selecting that mode in the connection form and explicitly granting command authority after starting the class E-stop. Manual controls use the command session and lease. GO is disabled in Robot control; use Dry run to record a destination. Returning to Observe or Dry run stops movement but retains an existing command connection until **Disconnect** returns its lease; reconnect in Observe for a sensor-only session.
 
 Camera settings independently control acquisition, display and rate (above 0 through 30 Hz) for each source. One selected visual/depth pair feeds perception. Mapping and destination preview require physically verified alignment, calibration, timestamps and odom transforms. The alignment checkbox records the operator's verification; it does not establish calibration. Optional human pose must be enabled when connecting. No speculative multi-camera Spot fusion is added.
 
-After fresh standing readiness, hold W/A/S/D, arrows or a direction button to drive at the requested 0.05–0.35 m/s limit. Release requests zero velocity. Manual commands expire after 0.35 s; the browser presence timeout is 0.30 s. Existing supervised trajectory commands expire after 0.75 s and recheck robot/route state while executing. Stop, focus loss, a hidden tab, connection failure and shutdown clear movement authority. Manual motion, posture and gestures cannot run alongside active GO.
+After fresh standing readiness, hold W/A/S/D, arrows or a direction button to drive at the requested 0.05–0.35 m/s limit. Release requests zero velocity. Manual commands expire after 0.35 s; the browser presence timeout is 0.30 s. Stop, focus loss, a hidden tab, connection failure and shutdown clear movement authority.
 
-Credentials are used for that connection and not saved. The server listens only on the laptop's loopback address. **STOP MOVEMENT** requests zero velocity and clears approval; it does not operate the separate class E-stop. Keep the class E-stop available. See [the physical M5 checklist](docs/milestone-5.md) before any supervised test. No live robot was used for this interface pass.
+Credentials are used for that connection and not saved. The server listens only on the laptop's loopback address. **STOP MOVEMENT** requests zero velocity and clears approval; it does not operate the separate class E-stop. Keep the class E-stop available. See [the M5 checklist](docs/milestone-5.md) before any supervised test on the `codex/m5-live-spot-interaction` branch. No live robot was used for this interface pass.
 
 ## Run with the class E-stop
 

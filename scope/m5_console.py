@@ -413,14 +413,14 @@ def main(argv=None):
         help="Assert that physical pixel alignment, intrinsics and transforms were checked")
     parser.add_argument("--human-pose", action="store_true", help="Enable optional pose detector")
     parser.add_argument("--supervised-go", action="store_true",
-        help="After dry-run gates: acquire a lease and enable explicit GO on Spot")
+        help="Not included in this version; kept so old command lines fail with a clear message")
     args = parser.parse_args(argv)
     if args.spot and not args.visual_source:
         parser.error("--spot needs --visual-source from 'scope spot-sensors'")
     if args.alignment_verified and not args.depth_source:
         parser.error("--alignment-verified needs --depth-source")
-    if args.supervised_go and (not args.spot or not args.alignment_verified):
-        parser.error("--supervised-go needs --spot and verified RGB-D geometry")
+    if args.supervised_go:
+        parser.error("--supervised-go is not included in this version")
     backend = DemoBackend() if args.demo else SpotBackend(args.spot, args.visual_source,
         args.depth_source, args.alignment_verified, args.human_pose, args.supervised_go)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

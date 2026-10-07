@@ -132,19 +132,9 @@ class SpotBackend:
         self.lease_keepalive = None
         self.map_lock = threading.RLock()
         if supervised_go:
-            from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
-            from bosdyn.client.robot_command import RobotCommandClient
-            from .spot_navigation import AsyncSpotExecutor, SpotTrajectoryExecutor
-            client = self.source.robot.ensure_client(RobotCommandClient.default_service_name)
-            lease_client = self.source.robot.ensure_client(LeaseClient.default_service_name)
-            self.lease_keepalive = LeaseKeepAlive(lease_client, must_acquire=True,
-                                                  return_at_exit=True)
-            self.executor = AsyncSpotExecutor(SpotTrajectoryExecutor(
-                client, self.source.robot_pose, self._route_clear, enabled=True))
-            self.mode = "SPOT_SUPERVISED"
-        else:
-            self.executor = DryRunExecutor()
-            self.mode = "SPOT_SENSORS_DRY_RUN"
+            raise ValueError("Supervised GO is not included in this version")
+        self.executor = DryRunExecutor()
+        self.mode = "SPOT_SENSORS_DRY_RUN"
         self.frame = self.pipeline = self.snapshot = self.robot = None
         self.frame_receipts = {}
         self.entities = []

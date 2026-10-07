@@ -308,17 +308,8 @@ class Workspace:
         visual = data.get('visual_source') or next((n for n in source.sources if 'fisheye_image' in n), '')
         backend = SpotBackend(hostname, visual, data.get('depth_source') or None,
             data.get('alignment_verified') is True, data.get('human_pose') is True, source=source)
-        self._enable_executor(backend)
         self._replace(backend)
         self.message = 'Connected; one visual/depth pair is processed'
-
-    def _enable_executor(self, backend):
-        if self.mode == 'robot_control' and self.control.session is not None:
-            from .spot_navigation import AsyncSpotExecutor, SpotTrajectoryExecutor
-            backend.executor = AsyncSpotExecutor(SpotTrajectoryExecutor(
-                self.control.session.client, backend.source.robot_pose,
-                backend._route_clear, enabled=True))
-            backend.mode = 'SPOT_SUPERVISED'
 
     def _action(self, name, data, epoch):
         if name == 'invalidate':
@@ -350,12 +341,8 @@ class Workspace:
                 self.interaction.stop()
             self.mode = mode
             if self.backend:
-                if self.backend.mode == 'SPOT_SUPERVISED':
-                    self.backend.executor.close()
-                    self.backend.mode = 'SPOT_SENSORS_DRY_RUN'
                 self.backend.executor = (VirtualExecutor() if self.control.demo and mode == 'dry_run'
                                          else DryRunExecutor())
-                self._enable_executor(self.backend)
                 self.interaction = InteractionSession(self.backend.executor)
             self.epoch += 1
             self.revision += 1
@@ -401,7 +388,9 @@ class Workspace:
             session.propose(b.robot, b.mapping)
         elif name == 'go':
             if self.mode == 'observe':
-                raise ValueError('Observe has no movement authorization; choose Dry run or Robot control')
+                raise ValueError('Observe has no movement authorization; choose Dry run')
+            if self.mode == 'robot_control':
+                raise ValueError('GO for the real robot is not included in this version; choose Dry run')
             controller = data.get('controller')
             if not isinstance(controller, str) or not 0 < len(controller) <= 80:
                 raise ValueError('Invalid browser control session')
@@ -526,8 +515,9 @@ class Workspace:
             'selected': candidate(c) if c else None, 'confirmed': session.confirmed is not None,
             'destination': asdict(p) if p else None,
             'can_confirm': fresh and session.confirmed is None,
+            # Physical GO is not part of this build: Robot control keeps manual drive only.
             'can_go': (fresh and p is not None and 0 <= now-p.proposed_host_s <= 10 and
-                       self.mode != 'observe' and not self.control.failed),
+                       self.mode in ('dry_run',) and not self.control.failed),
             'cameras': cameras,
             'visual_source': getattr(b, 'visual_source', 'synthetic-front'),
             'depth_source': getattr(b, 'depth_source', 'synthetic-depth'),
