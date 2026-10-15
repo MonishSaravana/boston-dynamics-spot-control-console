@@ -536,7 +536,7 @@ $("connect-button").addEventListener("click", async () => {
     $("robot-host").value ||= login.host || "";
     $("robot-user").value ||= login.username || "";
     $("robot-password").placeholder = login.password_saved
-      ? "Saved in Keychain · leave blank"
+      ? "•••••••• saved in Keychain"
       : "";
     $("connect-mode").value =
       state?.workspace?.mode === "observe" || !state?.workspace?.mode
