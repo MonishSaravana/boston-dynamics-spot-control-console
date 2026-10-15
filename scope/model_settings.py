@@ -6,6 +6,8 @@ six-query timing subset on the development Mac), not from Spot cameras.
 """
 
 import copy
+import os
+from pathlib import Path
 import threading
 
 from .open_vocab import VerifiedQueryDetector
@@ -119,11 +121,61 @@ def validate(values):
     return result
 
 
+# Apple's Metal driver aborts the whole process ("commit an already committed
+# command buffer") when two threads use the GPU at once. Every load, warm-up
+# and inference through this module holds this lock.
+INFERENCE_LOCK = threading.RLock()
+
+
+def cached_snapshots():
+    """Pinned model snapshots already in the local Hugging Face cache."""
+    from .open_vocab import MODELS
+    from .query_segmentation import Sam2Segmenter
+    root = Path(os.environ.get("HF_HUB_CACHE") or
+                Path(os.environ.get("HF_HOME") or Path.home()/".cache"/"huggingface")/"hub")
+    pinned = [*MODELS.values(), (Sam2Segmenter.name, Sam2Segmenter.revision)]
+    return {repo: (root/f"models--{repo.replace('/', '--')}"/"snapshots"/revision).is_dir()
+            for repo, revision in pinned}
+
+
+def use_cached_models_offline():
+    """Skip Hugging Face network checks when the finder models are on disk.
+
+    Spot's Wi-Fi has no internet; online checks retry for minutes per file before
+    falling back to the cache. Call before transformers or huggingface_hub load.
+    """
+    from .open_vocab import MODELS
+    cached = cached_snapshots()
+    if all(cached[repo] for repo, _ in MODELS.values()):
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        return True
+    return False
+
+
+class Locked:
+    """Run one model call at a time; see INFERENCE_LOCK."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def query(self, frame, query):
+        with INFERENCE_LOCK:
+            return self._inner.query(frame, query)
+
+    def segment(self, rgb, candidates):
+        with INFERENCE_LOCK:
+            return self._inner.segment(rgb, candidates)
+
+
 class ModelLibrary:
     """Load each model's weights once. Settings only change how they are called."""
 
     def __init__(self):
-        self.lock = threading.Lock()
+        self.lock = INFERENCE_LOCK
         self.loaded = {}
 
     def _get(self, key, build):
@@ -179,9 +231,9 @@ def query_factory(values, library):
         primary = _configured(library.detector("grounding-dino", device), finder_px,
                               THRESHOLDS[values["confidence"]], .15)
         if values["finder"] == "fast":
-            return primary
+            return Locked(primary)
         verifier = _configured(library.detector("owlv2", device), checker_px, .15, .075)
-        return CheckedFinder(primary, verifier)
+        return Locked(CheckedFinder(primary, verifier))
     return build
 
 
@@ -189,7 +241,7 @@ def segmenter_factory(values, library):
     if values["outline"] == "grabcut":
         from .query_segmentation import GrabCutSegmenter
         return GrabCutSegmenter
-    return lambda: library.segmenter(_device(values))
+    return lambda: Locked(library.segmenter(_device(values)))
 
 
 def preload(values, library):
@@ -202,13 +254,14 @@ def preload(values, library):
     from .interaction import TextCommand
     from .semantic_query import SemanticQuery
     library.keep_only(_device(values))
-    finder = query_factory(values, library)()
+    finder = query_factory(values, library)()._inner
     blank = SimpleNamespace(rgb=np.zeros((480, 640, 3), np.uint8), timestamp_s=0.,
                             frame_id="warmup")
     query = SemanticQuery.from_command(TextCommand("chair"))
     # A blank image finds nothing, so warm the checker directly as well.
-    for model in (finder.primary, finder.verifier) if isinstance(finder, CheckedFinder) else (finder,):
-        model.query(blank, query)
-    segmenter = segmenter_factory(values, library)()
-    segmenter.segment(blank.rgb, [SimpleNamespace(box_xyxy=(200., 140., 440., 340.),
-                                                  evidence={})])
+    with INFERENCE_LOCK:
+        for model in (finder.primary, finder.verifier) if isinstance(finder, CheckedFinder) else (finder,):
+            model.query(blank, query)
+        segmenter = segmenter_factory(values, library)()
+        segmenter.segment(blank.rgb, [SimpleNamespace(box_xyxy=(200., 140., 440., 340.),
+                                                      evidence={})])

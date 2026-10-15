@@ -731,6 +731,10 @@ def main():
     parser.add_argument('--no-browser', action='store_true', help='Do not open the browser automatically')
     parser.add_argument('--runs-dir', type=Path, action='append', help='Local artifact root (repeatable; default: ./runs)')
     args = parser.parse_args()
+    from scope.model_settings import use_cached_models_offline
+    if not args.demo and not use_cached_models_offline():
+        print('Detection models are not downloaded yet. Start SCOPE once on a network with '
+              'internet and run a search, or object search will fail on Spot\'s Wi-Fi.', flush=True)
     server = make_server(demo=args.demo, port=args.port, runs_dirs=args.runs_dir)
     url = f'http://127.0.0.1:{server.server_port}/'
     print(f'SCOPE local console: {url}', flush=True)

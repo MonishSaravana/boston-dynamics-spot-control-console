@@ -129,8 +129,11 @@ class SpotBackend:
         self.visual_source, self.depth_source = visual_source, depth_source
         for name in self.source.sources:
             needed = name == visual_source or name == depth_source
-            self.source.configure(name, acquire=needed, process=needed,
-                                  display=name == visual_source)
+            # Other body cameras stay visible at a low rate; only the pair is processed.
+            viewer = name.endswith("_fisheye_image") and not needed
+            self.source.configure(name, acquire=needed or viewer, process=needed,
+                                  display=name == visual_source or viewer,
+                                  max_hz=2. if viewer else None)
         self.source.alignment_verified = alignment_verified
         self.lease_keepalive = None
         self.map_lock = threading.RLock()

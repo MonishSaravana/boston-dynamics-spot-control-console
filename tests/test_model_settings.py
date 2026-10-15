@@ -55,6 +55,7 @@ class ModelSettingsTests(unittest.TestCase):
         values = {**model_settings.DEFAULTS, "finder": "fast", "confidence": "loose",
                   "device": "cpu"}
         finder = model_settings.query_factory(values, library)()
+        self.assertIsInstance(finder, model_settings.Locked)
         loaded = library.loaded[("grounding-dino", "cpu")]
         self.assertIsNot(finder, loaded)
         self.assertEqual((finder.size, finder.threshold), (512, .35))
@@ -67,7 +68,7 @@ class ModelSettingsTests(unittest.TestCase):
         values = {**model_settings.DEFAULTS, "detail": "high", "confidence": "strict",
                   "device": "cpu"}
         finder = model_settings.query_factory(values, library)()
-        self.assertIsInstance(finder, model_settings.CheckedFinder)
+        self.assertIsInstance(finder._inner, model_settings.CheckedFinder)
         self.assertEqual((finder.primary.size, finder.primary.threshold), (800, .55))
         self.assertEqual((finder.verifier.size, finder.verifier.threshold), (768, .15))
         self.assertEqual(finder.metadata["verification"]["minimum_box_iou"], .3)
@@ -79,7 +80,7 @@ class ModelSettingsTests(unittest.TestCase):
                       GrabCutSegmenter)
         sam = model_settings.segmenter_factory(
             {**model_settings.DEFAULTS, "outline": "sam2", "device": "cpu"}, library)
-        self.assertIs(sam(), sam())
+        self.assertIs(sam()._inner, sam()._inner)
 
     def test_library_loads_once_and_frees_other_devices(self):
         library = model_settings.ModelLibrary()
@@ -108,6 +109,39 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertFalse(state.durations_ms)
         self.assertIs(pipeline.core.mapping, mapping)
         self.assertEqual(backend.model_settings["outline"], "sam2")
+
+
+class GpuAndOfflineTests(unittest.TestCase):
+    def test_model_calls_never_overlap(self):
+        import threading, time
+        active, overlaps = [0], []
+        class Slow:
+            name, metadata = "slow", {}
+            def query(self, frame, query):
+                active[0] += 1
+                overlaps.append(active[0])
+                time.sleep(.02)
+                active[0] -= 1
+        locked = model_settings.Locked(Slow())
+        threads = [threading.Thread(target=locked.query, args=(None, None)) for _ in range(6)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        self.assertEqual(max(overlaps), 1)
+        self.assertEqual(locked.name, "slow")
+
+    def test_offline_only_when_finder_models_are_cached(self):
+        import os, tempfile
+        from pathlib import Path
+        from scope.open_vocab import MODELS
+        with tempfile.TemporaryDirectory() as cache, patch.dict(os.environ, {"HF_HUB_CACHE": cache}, clear=False):
+            os.environ.pop("HF_HUB_OFFLINE", None)
+            os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            self.assertFalse(model_settings.use_cached_models_offline())
+            self.assertNotIn("HF_HUB_OFFLINE", os.environ)
+            for repo, revision in MODELS.values():
+                (Path(cache)/f"models--{repo.replace('/', '--')}"/"snapshots"/revision).mkdir(parents=True)
+            self.assertTrue(model_settings.use_cached_models_offline())
+            self.assertEqual(os.environ["HF_HUB_OFFLINE"], "1")
 
 
 class WorkspaceModelActionTests(unittest.TestCase):

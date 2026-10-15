@@ -26,7 +26,7 @@ To connect to a robot, start without `--demo`, then use **Connection**:
 .venv/bin/python scope_web.py
 ```
 
-Credentials are used for that connection and are not saved. The server listens on the loopback address only.
+Credentials are used for that connection and are not saved. The server listens on the loopback address only. Spot's Wi-Fi has no internet, so run one object search on a normal network first to download the detection models. After that SCOPE loads them from disk without network checks.
 
 **macOS launcher.** Download the ZIP from GitHub, extract it, and run `zsh "Open SCOPE.command"`. It needs Git, Python 3.11 to 3.14 and an internet connection. It clones the repository to `~/Library/Application Support/SCOPE`, builds its own environment, and updates from `main` on each launch. The update logic was checked against a temporary Git repository; a fresh install from GitHub has not been run.
 
@@ -100,7 +100,7 @@ Panels on Live and World can be rearranged: drag a panel bar onto another panel'
 3. Start the console in a second Terminal, open **Connection**, and enter the address, username and password. Choose Robot control only if you need to drive or GO, and tick the command authority box once the E-stop is running. Press **Power On**, then **Stand**; driving and GO stay locked until fresh robot state confirms Spot is standing still.
 4. The console starts on `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame` when the robot lists them. Until alignment is confirmed it runs camera-only, with no map or GO. For GO, open **Sources** and tick the alignment box only after checking on the robot that depth edges line up with the camera image. Choose a different pair there if needed.
 
-Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. One visual and depth pair feeds perception. Mapping and destination preview need physically verified alignment, calibration, timestamps and odom transforms. The alignment checkbox records that you checked it; it does not calibrate anything. The front panorama is an approximate stitch.
+Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. The other fisheye cameras are shown at 2 Hz by default. One visual and depth pair feeds perception, and the depth list only offers the depth image registered to the chosen camera. Mapping and destination preview need physically verified alignment, calibration, timestamps and odom transforms. The alignment checkbox records that you checked it; it does not calibrate anything. The front panorama is an approximate stitch.
 
 Returning to Observe or Dry run stops movement but keeps an existing command lease until you press **Disconnect**.
 

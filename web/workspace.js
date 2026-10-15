@@ -486,7 +486,8 @@ function updateWorkspace(ws, control) {
       const camera = ws.cameras?.[ws.visual_source];
       $("image-meta").textContent = control.demo
         ? "Simulated RGB-D pair"
-        : `Age ${fixed(camera?.age_s, 1)} s · ${camera?.health || "Unavailable"}`;
+        : `Age ${fixed(camera?.age_s, 1)} s · ${camera?.health || "Unavailable"}${camera?.error ? ` · ${camera.error.slice(0, 90)}` : ""}`;
+      $("image-meta").title = camera?.error || "";
       $("camera-caption").textContent =
         `Processing pair: ${ws.visual_source} + ${ws.depth_source || "no depth"}${ws.alignment_verified ? "" : " · alignment unverified"}`;
       $("camera-empty").textContent =
@@ -784,35 +785,44 @@ function buildModules(rows) {
     $("module-controls").append(row);
   }
 }
+// Only depth registered to the selected camera can produce world geometry.
+function buildDepthOptions(keys, simulated, current) {
+  const select = $("depth-source"),
+    visual = $("visual-source").value,
+    matching = visual.replace("_fisheye_image", "_depth_in_visual_frame");
+  select.replaceChildren();
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No depth (camera only, no map or GO)";
+  select.append(none);
+  // Synthetic depth is part of the fixed fixture, not a separately acquired Spot source.
+  const options = simulated
+    ? ["synthetic-depth"]
+    : keys.includes(matching) && matching !== visual
+      ? [matching]
+      : [];
+  for (const source of options) {
+    const option = document.createElement("option");
+    option.value = source;
+    option.textContent = source;
+    select.append(option);
+  }
+  select.value = options.includes(current) ? current : options[0] || "";
+}
 function buildPolicies(ws) {
   const keys = Object.keys(ws.cameras || {}),
     signature = JSON.stringify(keys);
   if (signature === policySignature) return;
   policySignature = signature;
-  for (const id of ["visual-source", "depth-source"]) {
-    $(id).replaceChildren();
-    if (id === "depth-source") {
-      const none = document.createElement("option");
-      none.value = "";
-      none.textContent = "No depth (query only)";
-      $(id).append(none);
-    }
-    for (const source of keys) {
-      const option = document.createElement("option");
-      option.value = source;
-      option.textContent = source;
-      $(id).append(option);
-    }
-  }
-  // Synthetic depth is part of the fixed fixture, not a separately acquired Spot source.
-  if (ws.simulated) {
+  $("visual-source").replaceChildren();
+  for (const source of keys.filter((name) => !name.includes("depth"))) {
     const option = document.createElement("option");
-    option.value = "synthetic-depth";
-    option.textContent = "synthetic-depth";
-    $("depth-source").append(option);
+    option.value = source;
+    option.textContent = source;
+    $("visual-source").append(option);
   }
   $("visual-source").value = ws.visual_source || "";
-  $("depth-source").value = ws.depth_source || "";
+  buildDepthOptions(keys, ws.simulated, ws.depth_source);
   $("alignment-verified").checked = ws.alignment_verified;
   $("alignment-label").textContent = ws.simulated
     ? "Fixture alignment (synthetic)"
@@ -836,7 +846,9 @@ function buildPolicies(ws) {
     name.className = "camera-policy-name";
     name.textContent = source;
     const health = document.createElement("small");
-    health.textContent = status.health;
+    health.textContent = status.error
+      ? `${status.health} · ${status.error}`
+      : status.health;
     name.append(health);
     row.append(name);
     for (const [labelText, key] of [
@@ -941,6 +953,13 @@ $("settings-button").addEventListener("click", () => {
 });
 $("close-settings").addEventListener("click", () =>
   $("settings-dialog").close(),
+);
+$("visual-source").addEventListener("change", () =>
+  buildDepthOptions(
+    Object.keys(workspaceState?.cameras || {}),
+    workspaceState?.simulated,
+    "",
+  ),
 );
 $("pair-form").addEventListener("submit", async (e) => {
   e.preventDefault();
