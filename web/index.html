@@ -152,6 +152,13 @@
                     >
                       Sources</button
                     ><button
+                      id="models-button"
+                      class="quiet-button"
+                      type="button"
+                      title="Choose detection models and see their speed and accuracy"
+                    >
+                      Models</button
+                    ><button
                       id="fixture-toggle"
                       class="quiet-button"
                       type="button"
@@ -1016,6 +1023,36 @@ Select an artifact to inspect it.</pre>
       <p id="settings-message" role="status">
         Connect sensors to configure cameras.
       </p>
+    </dialog>
+    <dialog id="models-dialog" class="models-dialog">
+      <div class="dialog-head">
+        <h2>Perception models</h2>
+        <button
+          id="close-models"
+          type="button"
+          aria-label="Close perception models"
+        ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+      </div>
+      <p>
+        Change these when searches are too slow or pick the wrong thing.
+        Applying clears the current target; the next search uses the new
+        models.
+      </p>
+      <div class="perception-live">
+        <p id="perception-load" role="status">Models load on connection to Spot</p>
+        <dl id="perception-timings"></dl>
+      </div>
+      <form id="perception-form">
+        <div id="perception-options"></div>
+        <p id="perception-source" class="control-note"></p>
+        <p id="perception-message" class="dialog-error" role="alert" hidden=""></p>
+        <div class="dialog-actions">
+          <button id="perception-defaults" type="button">Reset to defaults</button
+          ><button id="apply-models" class="button-primary" type="submit">
+            Apply
+          </button>
+        </div>
+      </form>
     </dialog>
     <dialog id="rerun-dialog" class="rerun-dialog">
       <div class="dialog-head">

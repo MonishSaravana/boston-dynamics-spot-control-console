@@ -28,7 +28,9 @@ def _unit(v):
     return v/np.maximum(np.linalg.norm(v,axis=-1,keepdims=True),1e-9)
 
 
-def estimate_pointing(track, now_s, samples=256, seed=4):
+def estimate_pointing(track, now_s, samples=256, seed=4, latency_allowance_s=0.):
+    """latency_allowance_s widens joint-age limits by measured pose inference delay."""
+    arm_age_s,hand_age_s = .25+latency_allowance_s,.20+latency_allowance_s
     def abstain(reason):
         return PointingHypothesis(track.person_id,now_s,None,None,None,None,None,
             np.empty((0,3)),np.empty((0,3)),track.pose.observation_ids,0.,"ABSTAIN",reason)
@@ -36,7 +38,7 @@ def estimate_pointing(track, now_s, samples=256, seed=4):
         return abstain("Person not freshly associated/observed")
     for side,quality in sorted(track.pose.hand_quality.items(),key=lambda v:-v[1]):
         base,tip = [track.pose.joints[f"{side}_index_{n}"] for n in ("mcp","tip")]
-        if quality<.60 or any(j.position is None or now_s-j.timestamp_s>.20 for j in (base,tip)):
+        if quality<.60 or any(j.position is None or now_s-j.timestamp_s>hand_age_s for j in (base,tip)):
             continue
         length = np.linalg.norm(tip.position-base.position)
         if not .035<=length<=.16:
@@ -53,7 +55,7 @@ def estimate_pointing(track, now_s, samples=256, seed=4):
     options = []
     for side in ("left","right"):
         s,e,w = [track.pose.joints[f"{side}_{n}"] for n in ("shoulder","elbow","wrist")]
-        if any(j.position is None or now_s-j.timestamp_s>.25 for j in (s,w)):
+        if any(j.position is None or now_s-j.timestamp_s>arm_age_s for j in (s,w)):
             continue
         length = np.linalg.norm(w.position-s.position)
         if not .20<=length<=1.:
@@ -64,7 +66,7 @@ def estimate_pointing(track, now_s, samples=256, seed=4):
         # Continuous arm-extension and body-direction evidence. A downward resting
         # arm or folded arm does not become a confident target ray.
         resting_penalty = float(np.clip(1.-max(0.,np.dot(direction,down))**2,0.,1.))
-        complete = e.position is not None and now_s-e.timestamp_s<=.25
+        complete = e.position is not None and now_s-e.timestamp_s<=arm_age_s
         extension = 1.
         if complete:
             upper,lower = e.position-s.position,w.position-e.position

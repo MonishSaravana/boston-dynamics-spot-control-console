@@ -62,6 +62,21 @@ Driving unlocks only after fresh robot state confirms Spot is standing. Releasin
 
 **STOP MOVEMENT** requests zero velocity and clears any approval. It is not the class E-stop.
 
+### Perception models
+
+**Models** on the Live camera panel picks the models used for object search. Each choice shows its measured speed and accuracy and what it means in practice.
+
+| Setting | Choices |
+| --- | --- |
+| Object finder | Checked (Grounding DINO + OWLv2, the default) or Fast (Grounding DINO only) |
+| Confidence needed | 0.35, 0.45 (default) or 0.55 |
+| Image detail | 512 px (default) or 800/768 px |
+| Object outline | GrabCut (default) or SAM 2.1 Tiny |
+| Re-check the target every | 1.0, 1.5 (default) or 3.0 s |
+| Run models on | Apple GPU when available (default) or CPU |
+
+The quoted numbers come from public indoor photos and the development Mac, not from Spot's cameras ([M4.5 report](docs/milestone-4.5.md)). When connected, the dialog also shows search and outline times measured on that connection. Applying a change clears the current target, keeps the map, and loads the new models in the background. GO must be stopped before you change models. In the offline demo, searches return fixture results, so settings are only saved for the next Spot connection.
+
 ### Robot model and layout
 
 The **Robot model** panel draws the SDK model. In **Measured** mode it follows the 12 leg joint angles from fresh robot telemetry, but only when the robot's skeleton matches the SDK model. Body tilt is not measured, so the model is always drawn level. In the demo it shows the zero pose, labeled simulated.
@@ -83,7 +98,7 @@ Panels on Live and World can be rearranged: drag a panel bar onto another panel'
    ```
 
 3. Start the console in a second Terminal, open **Connection**, and enter the address, username and password. Choose Robot control only if you need to drive or GO, and tick the command authority box once the E-stop is running. Press **Power On**, then **Stand**; driving and GO stay locked until fresh robot state confirms Spot is standing still.
-4. For GO, open **Sources**, choose the visual camera and its matching depth source (for example `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame`), and tick the alignment box only after checking on the robot that depth edges line up with the camera image.
+4. The console starts on `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame` when the robot lists them. Until alignment is confirmed it runs camera-only, with no map or GO. For GO, open **Sources** and tick the alignment box only after checking on the robot that depth edges line up with the camera image. Choose a different pair there if needed.
 
 Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. One visual and depth pair feeds perception. Mapping and destination preview need physically verified alignment, calibration, timestamps and odom transforms. The alignment checkbox records that you checked it; it does not calibrate anything. The front panorama is an approximate stitch.
 

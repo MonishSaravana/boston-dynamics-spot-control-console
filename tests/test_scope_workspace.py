@@ -13,8 +13,19 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from scope.live_interaction import DryRunExecutor, RobotPose
-from scope.workspace import GuardedDispatch, RunLibrary, Workspace
+from scope.workspace import GuardedDispatch, RunLibrary, Workspace, default_pair
 from scope_web import WebControl, make_server
+
+
+class DefaultPairTests(unittest.TestCase):
+    def test_front_left_and_matching_depth_are_the_default(self):
+        sources = ['back_fisheye_image', 'back_depth_in_visual_frame',
+                   'frontleft_fisheye_image', 'frontleft_depth_in_visual_frame']
+        self.assertEqual(default_pair(sources),
+                         ('frontleft_fisheye_image', 'frontleft_depth_in_visual_frame'))
+        self.assertEqual(default_pair(sources, 'back_fisheye_image'),
+                         ('back_fisheye_image', 'back_depth_in_visual_frame'))
+        self.assertEqual(default_pair(['left_fisheye_image']), ('left_fisheye_image', None))
 
 
 class WorkspaceTests(unittest.TestCase):

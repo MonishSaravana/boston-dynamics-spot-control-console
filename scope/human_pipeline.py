@@ -1,5 +1,6 @@
 """Independent offline/realtime stages sharing M1 frames and M2 entities."""
 
+from collections import deque
 from dataclasses import replace
 import time
 
@@ -18,6 +19,9 @@ from .synthetic import room_boxes,cast_boxes
 MODULES = ("mapping", "semantic_detection", "human_pose", "lifting", "fusion", "tracking",
            "pointing", "intersection", "world_entities", "memory", "memory_persist", "robot_visualization",
            "map_visualization", "rerun", "visualization", "decode", "hand_pose")
+# Pointing tolerates measured pose inference delay up to this much on top of
+# its own joint-age limits. CPU Keypoint R-CNN results arrive 0.4-0.55 s old.
+MAX_POSE_LATENCY_ALLOWANCE_S = .6
 
 
 class VisibleRoomDetector(SyntheticTruthDetector):
@@ -73,12 +77,19 @@ class HumanPipeline:
         self.tracker = PersonTracker()
         self.realtime = realtime
         self.workers = {}
+        self.pose_latencies_s = deque(maxlen=15)
         self.memory_frames, self.memory_detections, self.memory_projections = [],[],[]
         self.memory_status = {"state":"COLLECTING", "frames":0,
                               "reason":"M3 imports completed immutable episodes"}
         self.snapshots = []
 
-    def _infer(self, name, timestamp, payload, function, source):
+    def pose_latency_allowance_s(self):
+        """Median age of recently consumed realtime pose results, capped."""
+        if not self.pose_latencies_s:
+            return 0.
+        return float(min(MAX_POSE_LATENCY_ALLOWANCE_S, np.median(self.pose_latencies_s)))
+
+    def _infer(self, name, timestamp, payload, function, source, submit=True):
         rt = self.runtime
         if not self.realtime:
             result = rt.run(name,timestamp,lambda:function(payload),source=source)
@@ -90,7 +101,8 @@ class HumanPipeline:
         state = rt.state(name)
         model=self.pose_detector if name.startswith("pose/") else self.semantic_detector
         if hasattr(model,"metadata"):state.metadata=dict(model.metadata)
-        if rt.due(name,timestamp):
+        # Realtime callers poll every tick; only due ticks submit new input.
+        if submit and rt.due(name,timestamp):
             worker.submit(payload)
         state.queue_depth,state.dropped_inputs = worker.queue_depth,max(state.dropped_inputs,worker.dropped)
         state.in_flight = worker.in_flight
@@ -115,6 +127,8 @@ class HumanPipeline:
             rt.mark(name,Health.STALE,"Inference result expired before consumption")
             return None
         rt.mark(name,Health.OK,"Fresh worker result")
+        if name.startswith("pose/"):
+            self.pose_latencies_s.append(max(0.,timestamp-old_s))
         return old_payload,value
 
     def step(self,samples,timestamp_s):
@@ -123,6 +137,8 @@ class HumanPipeline:
         completed_times = {"human_pose":[],"semantic_detection":[]}
         semantics_due = rt.due("semantic_detection",timestamp_s)
         humans_due = rt.due("human_pose",timestamp_s)
+        # A pose worker may finish between due ticks; consume it immediately.
+        poll_humans = humans_due or self.realtime and rt.state("human_pose").config.enabled
         for sample in samples:
             c = sample.camera_id
             frame = rt.run(f"camera/{c}",timestamp_s,lambda:sample.frame,source=sample.frame.source)
@@ -146,11 +162,12 @@ class HumanPipeline:
                         rt.run("world_entities",timestamp_s,lambda:self.entities.add_frame(projected),
                                input_s=used.frame.timestamp_s)
                         detections[c] = (used.frame,objects,projected)
-            if humans_due:
+            if poll_humans:
                 function = (lambda x:self.pose_detector.detect(x.frame,x.camera_id)) if self.pose_detector else (
                     lambda x:x.observations)
                 result = self._infer(f"pose/{c}",timestamp_s,sample,function,
-                    self.pose_detector.name if self.pose_detector else "oracle-visible-joints")
+                    self.pose_detector.name if self.pose_detector else "oracle-visible-joints",
+                    submit=humans_due)
                 if result is not None:
                     used,observations = result
                     completed_times["human_pose"].append(used.frame.timestamp_s)
@@ -174,7 +191,7 @@ class HumanPipeline:
                 rt.mark(f"camera/{c}",Health.UNAVAILABLE,"Camera input missing")
         # Aggregate health is derived from camera stages, not fabricated success.
         current_health = rt.snapshot(timestamp_s)
-        for aggregate,prefix,enabled in (("human_pose","pose",humans_due),
+        for aggregate,prefix,enabled in (("human_pose","pose",humans_due or bool(completed_times["human_pose"])),
                                           ("semantic_detection","semantic",semantics_due)):
             if enabled:
                 statuses = [current_health[f"{prefix}/{s.camera_id}"]["status"] for s in active]
@@ -210,8 +227,10 @@ class HumanPipeline:
         tracks = rt.run("tracking",timestamp_s,lambda:self.tracker.update(fused or [],timestamp_s))
         self.tracker.expire(timestamp_s)
         tracks = tracks if tracks is not None else []
+        allowance_s = self.pose_latency_allowance_s()
         hypotheses = rt.run("pointing",timestamp_s,
-            lambda:[estimate_pointing(t,timestamp_s) for t in tracks]) if rt.state("human_pose").config.enabled else None
+            lambda:[estimate_pointing(t,timestamp_s,latency_allowance_s=allowance_s) for t in tracks]
+            ) if rt.state("human_pose").config.enabled else None
         hypotheses = hypotheses or []
         if not hypotheses and rt.state("pointing").config.enabled:
             rt.mark("pointing",Health.UNAVAILABLE,"No fresh person geometry")
@@ -238,7 +257,8 @@ class HumanPipeline:
         snapshot = {"timestamp_s":timestamp_s,"samples":active,"tracks":tracks,
                     "pointing":hypotheses,"candidates":candidates or {},
                     "unresolved_views":unresolved_views,"unresolved_tracks":self.tracker.unresolved,
-                    "memory":dict(self.memory_status),"telemetry":rt.snapshot(timestamp_s)}
+                    "memory":dict(self.memory_status),"telemetry":rt.snapshot(timestamp_s),
+                    "pointing_latency_allowance_s":allowance_s}
         return snapshot
 
     def save_memory(self,output):

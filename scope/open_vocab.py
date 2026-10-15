@@ -65,8 +65,13 @@ class OpenVocabularyDetector:
                 target_sizes=[frame.rgb.shape[:2]])[0]
             labels = found.get("text_labels", found.get("labels"))
         else:
+            # OWLv2 pads the frame to a square (bottom/right) before resizing, so
+            # normalized boxes are relative to that square. transformers 4.57
+            # rescales (h, w) by max(h, w) internally; pass the square explicitly
+            # so non-square frames stay aligned without relying on that detail.
+            side = max(frame.rgb.shape[:2])
             found = self.processor.post_process_object_detection(outputs, threshold=self.low_threshold,
-                target_sizes=self.torch.tensor([frame.rgb.shape[:2]], device=self.device))[0]
+                target_sizes=self.torch.tensor([(side, side)], device=self.device))[0]
             labels = [query.alternatives[int(i)] for i in found["labels"].cpu()]
         candidates = []
         h, w = frame.rgb.shape[:2]

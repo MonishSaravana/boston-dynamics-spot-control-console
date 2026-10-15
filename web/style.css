@@ -1718,6 +1718,130 @@ dialog input[type="checkbox"] {
 .source-rate input {
   width: 56px;
 }
+.models-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+.perception-live {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+#perception-load::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--subtle);
+  vertical-align: 1px;
+}
+#perception-load[data-state="loading"]::before {
+  background: var(--target);
+}
+#perception-load[data-state="ready"]::before {
+  background: var(--accent);
+}
+#perception-load[data-state="failed"] {
+  color: var(--error);
+}
+#perception-load[data-state="failed"]::before {
+  background: var(--error);
+}
+#perception-timings {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+#perception-timings dt {
+  color: var(--muted);
+  font-family: var(--font);
+}
+#perception-timings[hidden] {
+  display: none;
+}
+.perception-option {
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 12px 0 14px;
+  margin: 0;
+}
+.perception-option legend {
+  float: left;
+  width: 100%;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+}
+.perception-help {
+  clear: both;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0 8px;
+}
+.perception-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+}
+.perception-choice {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.perception-choice:hover {
+  background: var(--hover);
+}
+.perception-choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.perception-choice input {
+  width: auto;
+  margin-top: 2px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+.perception-choice-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.perception-choice-body strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.perception-choice-body strong small {
+  margin-left: 6px;
+  font-weight: 500;
+  font-size: 10.5px;
+  color: var(--subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.perception-measured {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--subtle);
+}
+#perception-source {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  color: var(--subtle);
+}
 #settings-message {
   font-size: 12px;
   margin-top: 14px;

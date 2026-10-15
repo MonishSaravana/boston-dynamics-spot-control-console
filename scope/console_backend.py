@@ -17,6 +17,7 @@ from .mapping import MapConfig, VoxelMap
 from .perception_pipeline import PerceptionPipeline
 from .runtime import ModuleConfig
 from .semantic_query import SemanticQuery
+from .spot_live_source import rotate_frame, upright_quarter_turns
 from .interaction import TextCommand
 from .synthetic import SyntheticRoom, look_at, render, room_boxes
 
@@ -116,7 +117,9 @@ class SpotBackend:
     world_frame = "odom"
 
     def __init__(self, hostname, visual_source, depth_source=None, alignment_verified=False,
-                 human_pose=False, supervised_go=False, source=None):
+                 human_pose=False, supervised_go=False, source=None,
+                 model_settings=None, models=None):
+        from .model_settings import DEFAULTS, ModelLibrary
         from .spot_live_source import SpotReadOnlySource
         self.source = source if source is not None else SpotReadOnlySource.connect(hostname)
         if visual_source not in self.source.sources:
@@ -154,6 +157,8 @@ class SpotBackend:
         self.error = None
         self.human_pose = human_pose
         self.timings = {}
+        self.model_settings = dict(model_settings or DEFAULTS)
+        self.models = models if models is not None else ModelLibrary()
 
     @property
     def camera_status(self):
@@ -169,8 +174,7 @@ class SpotBackend:
         return pose
 
     def _init_pipeline(self, frame, has_geometry):
-        from .open_vocab import VerifiedQueryDetector
-        from .query_segmentation import GrabCutSegmenter
+        from .model_settings import REFRESH_S, query_factory, segmenter_factory
         config = MapConfig.around_frames([frame]) if has_geometry else MapConfig.synthetic()
         configs = {"mapping": ModuleConfig(enabled=has_geometry, max_hz=5),
                    "human_pose": ModuleConfig(enabled=self.human_pose, max_hz=3),
@@ -187,11 +191,30 @@ class SpotBackend:
                     self.model = TorchvisionPoseDetector()
                 return self.model.detect(f, c)
         self.pipeline = PerceptionPipeline(config,
-            lambda: VerifiedQueryDetector("auto", 512, .45),
-            GrabCutSegmenter, pose_detector=LazyPose() if self.human_pose else None,
-            configs=configs)
+            query_factory(self.model_settings, self.models),
+            segmenter_factory(self.model_settings, self.models),
+            pose_detector=LazyPose() if self.human_pose else None, configs=configs)
+        self.pipeline.requery_s = REFRESH_S[self.model_settings["refresh"]]
         self.mapping = self.pipeline.core.mapping
         self.mapping.world_frame = self.world_frame if has_geometry else None
+
+    def apply_model_settings(self, values):
+        """Swap finder/outline models without resetting the map or tracks."""
+        from .model_settings import REFRESH_S, query_factory, segmenter_factory
+        self.model_settings = dict(values)
+        pipeline = self.pipeline
+        if pipeline is None:
+            return
+        pipeline.query_factory = query_factory(values, self.models)
+        pipeline.segmenter_factory = segmenter_factory(values, self.models)
+        pipeline.query_detector = pipeline.segmenter = None
+        pipeline.requery_s = REFRESH_S[values["refresh"]]
+        pipeline.last_query_submit_s = None
+        # Latency shown next to the settings should describe the new choice.
+        for name in ("open_vocabulary", "segmentation"):
+            state = pipeline.runtime.state(name)
+            state.durations_ms.clear()
+            state.cpu_ms.clear()
 
     def tick(self):
         if self.pending is None:
@@ -226,6 +249,7 @@ class SpotBackend:
             frame = RgbdFrame(rgb.copy(), np.full((h, w), np.nan, np.float32),
                 K, np.eye(4), visual.acquisition_robot_s, visual.acquisition_robot_s,
                 "SPOT_RGB_ONLY_NO_WORLD_GEOMETRY", f"{visual.source}:{visual.acquisition_robot_s:.6f}")
+            frame = rotate_frame(frame, upright_quarter_turns(visual.source))
         if (self.pipeline is not None and self.frame is not None and
                 frame.frame_id == self.frame.frame_id and frame.source == self.frame.source):
             return self.frame

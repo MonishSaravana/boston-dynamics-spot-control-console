@@ -43,6 +43,7 @@ class PerceptionPipeline:
         self.pending_query = None
         self.generation,self.verification = 0,0
         self.last_query_submit_s = None
+        self.requery_s = 1.5
         self.latest_frame,self.last_core_frame,self.core_snapshot = None,None,None
         self.recent_frames = deque(maxlen=60)
         self.resources = {}
@@ -204,7 +205,7 @@ class PerceptionPipeline:
             # Refresh verified targets periodically; never run the query model
             # on every camera frame. Latest-only worker bounds the pending input.
             immutable = frame.source in ("RGB_FILE","MEASURED_NYU_REGISTERED_STILL","MEASURED_RGBD_FILE")
-            if enabled and (self.last_query_submit_s is None or not immutable and now_s-self.last_query_submit_s>=1.5) and self.runtime.due("open_vocabulary",now_s):
+            if enabled and (self.last_query_submit_s is None or not immutable and now_s-self.last_query_submit_s>=self.requery_s) and self.runtime.due("open_vocabulary",now_s):
                 self._submit("open_vocabulary",(generation,query,frame,self.runtime.state("segmentation").config.enabled),self._query)
                 self.last_query_submit_s = now_s
             elif not enabled and query.normalized in self.results:

@@ -662,6 +662,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, 'image/jpeg', picture) if picture else self._json(404, {'error': 'Display disabled or frame unavailable'})
         if path == '/api/runs':
             return self._json(200, {'artifacts': self.app.workspace.library.scan()})
+        if path == '/api/perception-models':
+            from scope import model_settings
+            return self._json(200, {'options': model_settings.OPTIONS,
+                                    'defaults': model_settings.DEFAULTS,
+                                    'source_note': model_settings.SOURCE_NOTE})
         return self._json(404, {'error': 'Not found'})
 
     def do_POST(self):

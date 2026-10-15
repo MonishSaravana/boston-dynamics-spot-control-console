@@ -30,6 +30,7 @@ from spot_demo import make_demo_frames, make_demo_panorama
 from spot_gesture import GestureGate, GestureVision, MODEL_DIR, Observation
 from spot_model_view import SpotModelView, hardware_matches_base
 from scope.qt_theme import COLORS, STYLE as GUI_STYLE, nav_label
+from scope.spot_live_source import CAMERA_ROTATION_DEG
 
 
 DEFAULT_SPEED = 0.20  # m/s, slower than the SDK WASD example's 0.5 m/s
@@ -47,8 +48,7 @@ PANORAMA_PERIOD = 2.0
 FRONT_PAIR = ('frontleft_fisheye_image', 'frontright_fisheye_image')
 CAMERAS = ('frontleft_fisheye_image', 'frontright_fisheye_image',
            'left_fisheye_image', 'right_fisheye_image', 'back_fisheye_image')
-ROTATION = {'frontleft_fisheye_image': -78, 'frontright_fisheye_image': -102,
-            'right_fisheye_image': 180}
+ROTATION = CAMERA_ROTATION_DEG
 KEYS = {Qt.Key_W: (1, 0), Qt.Key_Up: (1, 0),
         Qt.Key_S: (-1, 0), Qt.Key_Down: (-1, 0),
         Qt.Key_A: (0, 1), Qt.Key_Left: (0, 1),

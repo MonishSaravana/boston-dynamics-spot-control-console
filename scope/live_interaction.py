@@ -59,6 +59,8 @@ class RobotPose:
     observed_host_s: float
     world_frame: str
     standing: bool = True
+    # Spot reports STATE_STEPPING, not STANDING, while it walks a trajectory.
+    stepping: bool = False
 
 
 @dataclass(frozen=True)

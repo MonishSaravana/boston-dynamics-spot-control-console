@@ -14,6 +14,44 @@ from .data import Intrinsics, RgbdFrame
 from .live_interaction import RobotPose, TimingBook
 
 
+# Counterclockwise degrees (PIL Image.rotate) that make each Spot camera look
+# upright. Front fisheyes are mounted at roughly -78/-102 degrees.
+CAMERA_ROTATION_DEG = {"frontleft_fisheye_image": -78, "frontright_fisheye_image": -102,
+                       "right_fisheye_image": 180}
+
+
+def upright_quarter_turns(source):
+    """np.rot90 k (counterclockwise quarter turns) nearest the preview rotation."""
+    return round(CAMERA_ROTATION_DEG.get(source, 0)/90) % 4
+
+
+def rotate_frame(frame, quarter_turns):
+    """Rotate RGB, depth, intrinsics and camera pose together by k*90 degrees.
+
+    Pixels follow np.rot90(k). The optical frame turns about +Z with them, so
+    T_world_camera still maps the new optical axes to the same world points.
+    """
+    k = quarter_turns % 4
+    if k == 0:
+        return frame
+    K = frame.intrinsics
+    w, h = K.width-1, K.height-1
+    if k == 1:    # u' = v, v' = W-1-u
+        R = np.array([[0., 1, 0], [-1, 0, 0], [0, 0, 1]])
+        K = Intrinsics(K.height, K.width, K.fy, K.fx, K.cy, w-K.cx)
+    elif k == 2:  # u' = W-1-u, v' = H-1-v
+        R = np.diag([-1., -1, 1])
+        K = Intrinsics(K.width, K.height, K.fx, K.fy, w-K.cx, h-K.cy)
+    else:         # u' = H-1-v, v' = u
+        R = np.array([[0., -1, 0], [1, 0, 0], [0, 0, 1]])
+        K = Intrinsics(K.height, K.width, K.fy, K.fx, h-K.cy, K.cx)
+    turn = np.eye(4)
+    turn[:3, :3] = R.T  # old optical = R.T @ new optical
+    return replace(frame, rgb=np.ascontiguousarray(np.rot90(frame.rgb, k)),
+                   depth_m=np.ascontiguousarray(np.rot90(frame.depth_m, k)),
+                   intrinsics=K, T_world_camera=frame.T_world_camera @ turn)
+
+
 @dataclass
 class CameraPolicy:
     acquire: bool = True
@@ -166,6 +204,8 @@ def pair_to_frame(visual: SpotImage, depth: SpotImage, *, alignment_verified=Fal
     frame = RgbdFrame(rgb.copy(), meters, K, visual.T_root_sensor,
         visual.acquisition_robot_s, depth.acquisition_robot_s, "SPOT_LIVE",
         f"{visual.source}:{visual.acquisition_robot_s:.6f}")
+    # Detectors are trained on upright images; rotate after rectification.
+    frame = rotate_frame(frame, upright_quarter_turns(visual.source))
     frame.validate(max_pair_offset_s=max_pair_offset_s)
     return frame
 
@@ -318,10 +358,11 @@ class SpotReadOnlySource:
         if transform is None:
             raise ValueError("Robot body transform unavailable")
         T = np.asarray(transform.to_matrix(), dtype=float)
+        behavior = state.behavior_state.state
         return RobotPose(float(T[0, 3]), float(T[1, 3]),
             float(np.arctan2(T[1, 0], T[0, 0])), time.monotonic(),
-            self.root_frame, state.behavior_state.state ==
-            robot_state_pb2.BehaviorState.STATE_STANDING)
+            self.root_frame, behavior == robot_state_pb2.BehaviorState.STATE_STANDING,
+            behavior == robot_state_pb2.BehaviorState.STATE_STEPPING)
 
     def mark_processed(self, name, acquisition_robot_s):
         if self._last_processed.get(name) != acquisition_robot_s:

@@ -28,9 +28,12 @@ class SpotTrajectoryExecutor:
         self.measured = []
         self.timings = TimingBook()
 
-    def _readiness(self, destination):
+    def _readiness(self, destination, walking=False):
         pose = self.state_reader()
-        if (pose is None or not pose.standing or pose.world_frame != destination.world_frame
+        # The first dispatch needs Spot standing. Once our trajectory is active,
+        # stepping is the expected state rather than a reason to abort.
+        upright = pose is not None and (pose.standing or walking and pose.stepping)
+        if (not upright or pose.world_frame != destination.world_frame
                 or not 0 <= self.clock()-pose.observed_host_s <= .6):
             raise InteractionError("ROBOT STATE STALE or not standing")
         if not self.route_clear(destination):
@@ -51,6 +54,7 @@ class SpotTrajectoryExecutor:
         start = self.clock()
         first_xy = None
         response_seen = False
+        dispatched = False
         from bosdyn.api import basic_command_pb2, geometry_pb2
         from bosdyn.client.robot_command import RobotCommandBuilder
         params = RobotCommandBuilder.mobility_params()
@@ -65,7 +69,7 @@ class SpotTrajectoryExecutor:
             while self.clock()-start < 15.:
                 if self.cancel.is_set():
                     raise InteractionError("Stop requested")
-                pose = self._readiness(destination)
+                pose = self._readiness(destination, walking=dispatched)
                 if min(math.hypot(pose.x_m-x, pose.y_m-y)
                        for x, y in destination.route_xy_m) > .6:
                     raise InteractionError("ROBOT DEVIATED FROM PREVIEW")
@@ -85,6 +89,7 @@ class SpotTrajectoryExecutor:
                         command=command, end_time_secs=time.time()+.75, timeout=.7)
                 self.timings.add("command_rpc_ack", (time.perf_counter()-dispatch_start)*1000)
                 self.command_ids.append(command_id)
+                dispatched = True
                 feedback_start = time.perf_counter()
                 feedback = self.client.robot_command_feedback(command_id, timeout=.7)
                 self.timings.add("feedback_rpc", (time.perf_counter()-feedback_start)*1000)

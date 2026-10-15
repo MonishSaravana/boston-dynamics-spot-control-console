@@ -736,6 +736,7 @@ function updateWorkspace(ws, control) {
     }
   }
   if ($("settings-dialog").open) buildPolicies(ws);
+  if ($("models-dialog").open) updateModelStatus(ws);
   updateWorkstation(ws, control);
 }
 
@@ -950,6 +951,128 @@ $("pair-form").addEventListener("submit", async (e) => {
   });
   policySignature = "";
   buildPolicies(workspaceState);
+});
+
+let modelOptions = null;
+let modelDraft = null;
+async function openModels() {
+  clearMovement();
+  try {
+    modelOptions ||= await api("/api/perception-models");
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
+  modelDraft = { ...(workspaceState?.model_settings || modelOptions.defaults) };
+  buildModelOptions();
+  updateModelStatus(workspaceState || {});
+  $("perception-message").hidden = true;
+  $("models-dialog").showModal();
+}
+function buildModelOptions() {
+  const root = $("perception-options");
+  root.replaceChildren();
+  for (const option of modelOptions.options) {
+    const set = document.createElement("fieldset");
+    set.className = "perception-option";
+    const legend = document.createElement("legend");
+    legend.textContent = option.title;
+    const help = document.createElement("p");
+    help.className = "perception-help";
+    help.textContent = option.help;
+    const choices = document.createElement("div");
+    choices.className = "perception-choices";
+    for (const choice of option.choices) {
+      const label = document.createElement("label");
+      label.className = "perception-choice";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `model-${option.key}`;
+      input.value = choice.value;
+      input.checked = modelDraft[option.key] === choice.value;
+      input.addEventListener("change", () => {
+        modelDraft[option.key] = choice.value;
+        markModelChanges();
+      });
+      const body = document.createElement("span");
+      body.className = "perception-choice-body";
+      const name = document.createElement("strong");
+      name.textContent = choice.label;
+      if (modelOptions.defaults[option.key] === choice.value) {
+        const tag = document.createElement("small");
+        tag.textContent = "default";
+        name.append(tag);
+      }
+      const summary = document.createElement("span");
+      summary.textContent = choice.summary;
+      body.append(name, summary);
+      if (choice.measured) {
+        const measured = document.createElement("span");
+        measured.className = "perception-measured";
+        measured.textContent = choice.measured;
+        body.append(measured);
+      }
+      label.append(input, body);
+      choices.append(label);
+    }
+    set.append(legend, help, choices);
+    root.append(set);
+  }
+  $("perception-source").textContent = modelOptions.source_note;
+  markModelChanges();
+}
+function markModelChanges() {
+  if (!modelOptions || !modelDraft) return;
+  const current = workspaceState?.model_settings || modelOptions.defaults;
+  const changed = Object.keys(modelDraft).some(
+    (key) => modelDraft[key] !== current[key],
+  );
+  $("apply-models").disabled = !changed || !!workspaceState?.navigation_active;
+  $("apply-models").textContent = changed ? "Apply" : "No changes";
+}
+function updateModelStatus(ws) {
+  const load = ws.model_load || {};
+  const status = $("perception-load");
+  status.dataset.state = ws.simulated ? "demo" : load.state || "idle";
+  status.textContent = ws.simulated
+    ? "Offline demo: searches return fixture results, so these settings are saved for the next Spot connection."
+    : load.detail || "Models load on connection to Spot";
+  const timing = (item) =>
+    item?.latency?.count
+      ? `${fixed(item.latency.mean_ms, 0)} ms average · ${fixed(item.latency.p95_ms, 0)} ms slowest 5% · ${item.latency.count} runs`
+      : "No runs since the last change";
+  const modules = ws.modules || {};
+  $("perception-timings").hidden = ws.simulated || !ws.available;
+  details($("perception-timings"), [
+    ["Search, measured here", timing(modules.open_vocabulary)],
+    ["Outline, measured here", timing(modules.segmentation)],
+  ]);
+  markModelChanges();
+}
+$("models-button").addEventListener("click", openModels);
+$("close-models").addEventListener("click", () => $("models-dialog").close());
+$("perception-defaults").addEventListener("click", () => {
+  modelDraft = { ...modelOptions.defaults };
+  buildModelOptions();
+});
+$("perception-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  // Errors stay in the dialog; the page toast sits behind an open modal.
+  try {
+    await api("/api/workspace/action", {
+      name: "models",
+      epoch: workspaceState?.epoch,
+      revision: workspaceState?.revision,
+      controller,
+      settings: modelDraft,
+    });
+    $("perception-message").hidden = true;
+  } catch (error) {
+    $("perception-message").textContent = error.message;
+    $("perception-message").hidden = false;
+  }
+  await refresh();
+  markModelChanges();
 });
 $("rerun-help").addEventListener("click", openAdvanced3D);
 $("close-rerun").addEventListener("click", () => $("rerun-dialog").close());

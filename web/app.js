@@ -348,6 +348,7 @@ function canDrive() {
     !$("connect-dialog").open &&
     ![
       "settings-dialog",
+      "models-dialog",
       "diagnostic-drawer",
       "connection-menu",
       "rerun-dialog",

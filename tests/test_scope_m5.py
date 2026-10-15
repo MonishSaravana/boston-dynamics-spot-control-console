@@ -322,6 +322,43 @@ class NavigationTests(unittest.TestCase):
         self.assertLess(client.sent[0]["end_time_secs"]-time.time(), 1.)
         self.assertTrue(client.sent[1]["command"].synchronized_command.mobility_command.HasField("se2_velocity_request"))
 
+    def test_stepping_is_accepted_only_after_trajectory_dispatch(self):
+        from types import SimpleNamespace as Obj
+        from bosdyn.api import basic_command_pb2
+        proposal_session = InteractionSession(VirtualExecutor(), clock=lambda: 10.)
+        proposal_session.offer([candidate(10.)])
+        proposal_session.confirm()
+        destination = proposal_session.propose(RobotPose(-2., 0., 0., 10., "odom"), free_map())
+        class Client:
+            def __init__(self): self.sent, self.polls = [], 0
+            def robot_command(self, **kw):
+                self.sent.append(kw)
+                return len(self.sent)
+            def robot_command_feedback(self, *args, **kw):
+                self.polls += 1
+                traj = Obj(status=1 if self.polls > 1 else 0, STATUS_AT_GOAL=1,
+                           body_movement_status=2, BODY_STATUS_SETTLED=2)
+                mobility = Obj(status=basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING,
+                               se2_trajectory_feedback=traj)
+                return Obj(feedback=Obj(synchronized_feedback=Obj(mobility_command_feedback=mobility)))
+        start, goal = destination.route_xy_m[0], (destination.x_m, destination.y_m)
+        poses = iter([RobotPose(*start, 0., 10., "odom"),
+                      RobotPose(*goal, destination.yaw_rad, 10., "odom",
+                                standing=False, stepping=True)])
+        client = Client()
+        executor = SpotTrajectoryExecutor(client, lambda: next(poses), lambda _: True,
+            enabled=True, clock=lambda: 10., wait=lambda _: False)
+        self.assertEqual(executor.execute(destination), "ARRIVED_MEASURED_FEEDBACK")
+
+        stepping = RobotPose(*start, 0., 10., "odom", standing=False, stepping=True)
+        client = Client()
+        executor = SpotTrajectoryExecutor(client, lambda: stepping, lambda _: True,
+            enabled=True, clock=lambda: 10.)
+        with self.assertRaisesRegex(InteractionError, "not standing"):
+            executor.execute(destination)
+        self.assertFalse(any(sent["command"].synchronized_command.mobility_command
+                             .HasField("se2_trajectory_request") for sent in client.sent))
+
 
 class ConsoleIntegrationTests(unittest.TestCase):
     def test_simulated_buttons_share_confirm_then_go(self):

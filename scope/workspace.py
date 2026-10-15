@@ -22,6 +22,7 @@ from PIL import Image, ImageDraw
 
 from .console_backend import DemoBackend, SpotBackend, camera_box, draw_perception_overlay
 from .live_interaction import DryRunExecutor, InteractionSession, RobotPose, VirtualExecutor
+from . import model_settings
 from .runtime import ModuleConfig
 
 MODES = ('observe', 'dry_run', 'robot_control')
@@ -63,6 +64,20 @@ class GuardedDispatch:
 
     def stop(self):
         self.executor.stop()
+
+
+def default_pair(sources, visual=None, depth=None):
+    """Front-left camera and its registered depth unless the operator chose others.
+
+    Depth alignment stays unverified until the operator confirms it in Sources.
+    """
+    if not visual:
+        visual = ('frontleft_fisheye_image' if 'frontleft_fisheye_image' in sources else
+                  next((n for n in sources if 'fisheye_image' in n), ''))
+    if not depth:
+        matching = visual.replace('_fisheye_image', '_depth_in_visual_frame')
+        depth = matching if matching != visual and matching in sources else None
+    return visual, depth
 
 
 def clean(value):
@@ -181,6 +196,10 @@ class Workspace:
         self.navigation_controller = None
         self.last_presence = 0.
         self.library = RunLibrary(runs_dirs)
+        self.model_settings = dict(model_settings.DEFAULTS)
+        self.models = model_settings.ModelLibrary()
+        self.model_load = {'state': 'idle', 'detail': 'Models load on connection to Spot'}
+        self.model_load_generation = 0
         self.thread = threading.Thread(target=self._run, name='scope-workspace', daemon=True)
         self.thread.start()
         self.initialization = None
@@ -213,6 +232,8 @@ class Workspace:
             return {**self.cached, 'mode': self.mode, 'epoch': self.epoch,
                     'revision': self.revision, 'version': self.version, 'message': self.message,
                     'available': self.backend is not None,
+                    'model_settings': dict(self.model_settings),
+                    'model_load': dict(self.model_load),
                     'navigation_active': self.navigation_controller is not None}
 
     def image(self, name):
@@ -305,11 +326,14 @@ class Workspace:
             source = SpotReadOnlySource.connect(hostname, username=username, password=password)
         if self.closed.is_set() or self.epoch != epoch:
             raise ValueError('Connection cancelled')
-        visual = data.get('visual_source') or next((n for n in source.sources if 'fisheye_image' in n), '')
-        backend = SpotBackend(hostname, visual, data.get('depth_source') or None,
-            data.get('alignment_verified') is True, data.get('human_pose') is True, source=source)
+        visual, depth = default_pair(source.sources, data.get('visual_source'),
+                                     data.get('depth_source'))
+        backend = SpotBackend(hostname, visual, depth,
+            data.get('alignment_verified') is True, data.get('human_pose') is True, source=source,
+            model_settings=self.model_settings, models=self.models)
         self._enable_executor(backend)
         self._replace(backend)
+        self._preload_models()
         self.message = 'Connected; one visual/depth pair is processed'
 
     def _enable_executor(self, backend):
@@ -358,6 +382,20 @@ class Workspace:
                 self._enable_executor(self.backend)
                 self.interaction = InteractionSession(self.backend.executor)
             self.epoch += 1
+            self.revision += 1
+            return
+        if name == 'models':
+            if self.navigation_controller is not None:
+                raise ValueError('Stop the current GO before changing models')
+            self.model_settings = model_settings.validate(data.get('settings'))
+            b = self.backend
+            if b is not None and b.mode != 'SIMULATED':
+                b.apply_model_settings(self.model_settings)
+                self.interaction.invalidate('Model settings changed; inspect fresh evidence')
+                self._preload_models()
+                self.message = 'Model settings applied to the next search'
+            else:
+                self.message = 'Model settings saved; they apply when connected to Spot'
             self.revision += 1
             return
         b, session = self.backend, self.interaction
@@ -436,7 +474,8 @@ class Workspace:
             # Close previous workers before changing the selected processing pair.
             b.pool.shutdown(wait=True, cancel_futures=True)
             new = SpotBackend('', visual, depth, b.source.alignment_verified,
-                              b.human_pose, source=b.source)
+                              b.human_pose, source=b.source,
+                              model_settings=self.model_settings, models=self.models)
             for name, policy in policies.items():
                 new.source.configure(name, acquire=policy.acquire or name in (visual, depth),
                     display=policy.display, process=name in (visual, depth), max_hz=policy.max_hz)
@@ -462,6 +501,27 @@ class Workspace:
             raise ValueError('Unknown workspace action')
         self.revision += 1
         self.message = session.message
+
+    def _preload_models(self):
+        """Load weights off the workspace thread so the first search does not stall."""
+        values = dict(self.model_settings)
+        with self.lock:
+            self.model_load_generation += 1
+            generation = self.model_load_generation
+            self.model_load = {'state': 'loading', 'detail': 'Loading the selected models'}
+
+        def load():
+            start = time.monotonic()
+            try:
+                model_settings.preload(values, self.models)
+                status = {'state': 'ready',
+                          'detail': f'Selected models loaded in {time.monotonic() - start:.1f} s'}
+            except Exception as exc:
+                status = {'state': 'failed', 'detail': f'{type(exc).__name__}: {exc}'}
+            with self.lock:
+                if generation == self.model_load_generation:
+                    self.model_load = status
+        threading.Thread(target=load, name='scope-model-load', daemon=True).start()
 
     def _mapping_enabled(self):
         b = self.backend
