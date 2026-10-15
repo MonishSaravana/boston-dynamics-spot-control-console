@@ -730,6 +730,9 @@ def main():
     parser.add_argument('--port', type=int, default=0, help='Local port; 0 chooses an available port')
     parser.add_argument('--no-browser', action='store_true', help='Do not open the browser automatically')
     parser.add_argument('--runs-dir', type=Path, action='append', help='Local artifact root (repeatable; default: ./runs)')
+    parser.add_argument('--auto-connect', metavar='HOST', nargs='?', const='192.168.80.3',
+                        help='Connect in Robot control once the class E-stop is active, using the Keychain password')
+    parser.add_argument('--user', default='user', help='Robot username for --auto-connect')
     args = parser.parse_args()
     from scope.model_settings import use_cached_models_offline
     if not args.demo and not use_cached_models_offline():
@@ -738,6 +741,10 @@ def main():
     server = make_server(demo=args.demo, port=args.port, runs_dirs=args.runs_dir)
     url = f'http://127.0.0.1:{server.server_port}/'
     print(f'SCOPE local console: {url}', flush=True)
+    if args.auto_connect and not args.demo:
+        from scope.robot_login import auto_connect
+        threading.Thread(target=auto_connect, args=(server.app, args.auto_connect, args.user),
+                         name='scope-auto-connect', daemon=True).start()
     if not args.no_browser:
         threading.Timer(0.3, lambda: webbrowser.open(url)).start()
     try:

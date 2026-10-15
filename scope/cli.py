@@ -225,6 +225,11 @@ def _run_benchmark(args: argparse.Namespace) -> int:
 
 def _run_view(args: argparse.Namespace) -> int:
     directory = Path(args.directory)
+    if (directory / "session.rrd").exists():
+        # Saved from the live console: the recording already holds the final map.
+        print(f"Opening live session {directory.name}")
+        open_recording(directory / "session.rrd")
+        return 0
     if (directory / "semantic.rrd").exists() and not (directory / "map.npz").exists():
         frames = load_episode(directory)
         print(f"Loaded {len(frames)} semantic frames")

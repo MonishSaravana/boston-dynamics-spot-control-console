@@ -18,7 +18,7 @@ import numpy as np
 from .data import camera_to_world, project_depth
 from .mapping import FREE, OCCUPIED, VoxelMap
 
-MAX_BYTES = 1 << 30          # 1 GiB per session, then the recording finishes itself
+MAX_BYTES = 1_000_000_000    # 1 GB per session, then the recording finishes itself
 WARN_FRACTION = .8
 SAMPLE_HZ = 2.
 MAP_EVERY_S = 10.
@@ -57,7 +57,7 @@ def _session_folder(root):
 
 
 def _human_bytes(value):
-    return f"{value / 1e9:.2f} GB" if value >= 1e9 else f"{value / 1e6:.0f} MB"
+    return f"{value / 1e9:.1f} GB" if value >= 1e9 else f"{value / 1e6:.0f} MB"
 
 
 class SessionRecorder:
@@ -131,11 +131,11 @@ class SessionRecorder:
             elapsed = (self.ended_host_s or now_s) - self.started_host_s
             warning = None
             if self.limit_reached:
-                warning = f"Size limit of {_human_bytes(self.max_bytes)} reached; recording finished"
+                warning = f"{_human_bytes(self.max_bytes)} limit reached"
             elif self.bytes >= WARN_FRACTION * self.max_bytes:
-                warning = f"Recording is near its {_human_bytes(self.max_bytes)} limit"
+                warning = f"near {_human_bytes(self.max_bytes)} limit"
             elif self.dropped:
-                warning = f"{self.dropped} samples dropped while the disk caught up"
+                warning = f"{self.dropped} samples dropped"
             return {"state": self.state, "folder": self.folder.name, "path": str(self.folder),
                     "elapsed_s": max(0., elapsed), "bytes": self.bytes,
                     "max_bytes": self.max_bytes, "samples": self.samples,

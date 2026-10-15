@@ -135,6 +135,13 @@ class SpotBackend:
                                   display=name == visual_source or viewer,
                                   max_hz=2. if viewer else None)
         self.source.alignment_verified = alignment_verified
+        if alignment_verified:
+            self.source.alignment_method = self.source.alignment_method or "manual"
+        from .alignment import AlignmentCheck, registered_depth_for
+        # Spot's own registered pair can be confirmed automatically; see alignment.py.
+        self.alignment = (AlignmentCheck() if depth_source and not alignment_verified and
+                          depth_source == registered_depth_for(visual_source) else None)
+        self.last_alignment_probe_s = 0.
         self.lease_keepalive = None
         self.map_lock = threading.RLock()
         if supervised_go:
@@ -201,6 +208,12 @@ class SpotBackend:
         self.mapping = self.pipeline.core.mapping
         self.mapping.world_frame = self.world_frame if has_geometry else None
 
+    def _reset_pipeline(self):
+        """Start perception again with geometry; the old one shuts down off-thread."""
+        old, self.pipeline, self.mapping = self.pipeline, None, None
+        if old is not None:
+            threading.Thread(target=old.close, name="scope-pipeline-close", daemon=True).start()
+
     def apply_model_settings(self, values):
         """Swap finder/outline models without resetting the map or tracks."""
         from .model_settings import REFRESH_S, query_factory, segmenter_factory
@@ -234,6 +247,17 @@ class SpotBackend:
         if visual is None or not self.source.policy[self.visual_source].process:
             return self.frame
         has_geometry = False
+        checking = self.alignment is not None and self.alignment.give_up_if_slow() == "checking"
+        if checking and time.monotonic()-self.last_alignment_probe_s >= .4:
+            self.last_alignment_probe_s = time.monotonic()
+            try:
+                probe = self.source.rgbd(self.visual_source, self.depth_source, assume_aligned=True)
+                if self.alignment.observe(probe) == "passed":
+                    self.source.alignment_verified = True
+                    self.source.alignment_method = "automatic"
+                    self._reset_pipeline()
+            except Exception as exc:
+                self.error = f"Alignment check: {exc}"
         if self.depth_source:
             try:
                 frame = self.source.rgbd(self.visual_source, self.depth_source)
@@ -260,7 +284,9 @@ class SpotBackend:
         self.frame_receipts[frame.frame_id] = visual.receive_host_s
         if len(self.frame_receipts) > 64:
             del self.frame_receipts[next(iter(self.frame_receipts))]
-        if self.pipeline is None and self.depth_source and self.source.alignment_verified and not has_geometry:
+        waiting = self.source.alignment_verified or (
+            self.alignment is not None and self.alignment.state == "checking")
+        if self.pipeline is None and self.depth_source and waiting and not has_geometry:
             return frame  # Keep cameras visible; wait for safe geometry before sizing the map.
         if self.pipeline is None:
             self._init_pipeline(frame, has_geometry)
@@ -387,9 +413,16 @@ class SpotBackend:
         return self.executor.status() if self.mode == "SPOT_SUPERVISED" else None
 
     def close(self):
+        # Stop any trajectory now; worker shutdown can take seconds when the
+        # robot is unreachable, so it must not hold up the console's request thread.
+        if self.mode == "SPOT_SUPERVISED":
+            self.executor.stop()
+        self.pool.shutdown(wait=False, cancel_futures=True)
+        threading.Thread(target=self._finish_close, name="scope-backend-close", daemon=True).start()
+
+    def _finish_close(self):
         if self.mode == "SPOT_SUPERVISED":
             self.executor.close()
-        self.pool.shutdown(wait=False, cancel_futures=True)
         if self.pipeline:
             self.pipeline.close()
         if self.lease_keepalive is not None:

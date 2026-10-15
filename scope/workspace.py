@@ -22,7 +22,8 @@ from PIL import Image, ImageDraw
 
 from .console_backend import DemoBackend, SpotBackend, camera_box, draw_perception_overlay
 from .live_interaction import DryRunExecutor, InteractionSession, RobotPose, VirtualExecutor
-from . import model_settings
+from . import model_settings, robot_login
+from .session_recording import SessionRecorder, copy_map
 from .runtime import ModuleConfig
 
 MODES = ('observe', 'dry_run', 'robot_control')
@@ -83,11 +84,17 @@ def default_pair(sources, visual=None, depth=None):
 def map_status(b, robot_failed=False):
     """One plain reason the live map is empty, or None once it is building."""
     camera = b.source.status().get(b.visual_source, {})
-    if robot_failed or camera.get('health') == 'FAILED':
+    if robot_failed:
         return 'No map: Spot is unreachable. Check the Wi-Fi, then reconnect from Connection.'
+    if camera.get('health') == 'FAILED':
+        return (f"No map: {b.visual_source} is not delivering images "
+                f"({camera.get('error') or 'no detail'}).")
     if not b.depth_source:
         return 'No map: choose the matching depth source in Sources.'
     if not b.source.alignment_verified:
+        check = getattr(b, 'alignment', None)
+        if check is not None and check.state == 'checking':
+            return 'Checking that depth lines up with the camera image…'
         return 'No map: check the depth overlay on the camera, then confirm alignment in Sources.'
     if b.mapping is None or b.mapping.revision < 1:
         return f'Waiting for camera and depth. {b.error}' if b.error else 'Waiting for camera and depth.'
@@ -234,11 +241,18 @@ class Workspace:
         self.models = model_settings.ModelLibrary()
         self.model_load = {'state': 'idle', 'detail': 'Models load on connection to Spot'}
         self.model_load_generation = 0
+        self.login = {'host': robot_login.DEFAULT_HOST, 'username': robot_login.DEFAULT_USER,
+                      'password_saved': not demo and bool(robot_login.saved_password(
+                          robot_login.DEFAULT_USER))}
+        self.recorder = None
         self.thread = threading.Thread(target=self._run, name='scope-workspace', daemon=True)
         self.thread.start()
         self.initialization = None
         if demo:
             self.initialization = self.submit('demo', {'enabled': True})
+        else:
+            # Load models before connecting, so the first search on the robot is ready.
+            self._preload_models()
 
     def submit(self, name, data):
         future = Future()
@@ -268,7 +282,9 @@ class Workspace:
                     'available': self.backend is not None,
                     'model_settings': dict(self.model_settings),
                     'model_load': dict(self.model_load),
-                    'navigation_active': self.navigation_controller is not None}
+                    'login': dict(self.login),
+                    'navigation_active': self.navigation_controller is not None,
+                    'recording': self.recorder.status() if self.recorder else None}
 
     def image(self, name):
         with self.lock:
@@ -306,6 +322,8 @@ class Workspace:
 
     def _replace(self, backend):
         old = self.backend
+        # A recording belongs to one map; changing the source ends and saves it.
+        self._finish_recording('source changed' if backend else 'disconnected')
         with self.authority_lock:
             with self.lock:
                 self.backend = backend
@@ -325,6 +343,12 @@ class Workspace:
         if self.control.demo or self.backend is not None or self.control.session is not None:
             raise ValueError('Leave demo or disconnect before connecting')
         hostname, username, password = (data.get(k, '') for k in ('hostname', 'username', 'password'))
+        hostname = hostname or robot_login.DEFAULT_HOST
+        username = username or robot_login.DEFAULT_USER
+        if not password:
+            password = robot_login.saved_password(username) or ''
+            if not password:
+                raise ValueError('Enter the password, or save it once with Start Spot.command')
         if (not all(isinstance(v, str) and v for v in (hostname, username, password)) or
                 len(hostname) > 255 or any(c.isspace() for c in hostname)):
             raise ValueError('Enter a valid robot address, username and password')
@@ -418,6 +442,8 @@ class Workspace:
             self.epoch += 1
             self.revision += 1
             return
+        if name == 'record':
+            return self._record(data.get('enabled'))
         if name == 'models':
             if self.navigation_controller is not None:
                 raise ValueError('Stop the current GO before changing models')
@@ -505,8 +531,9 @@ class Workspace:
                 raise ValueError('Choose available visual and depth sources')
             b.source.alignment_verified = data.get('alignment_verified') is True
             policies = {name: replace(policy) for name, policy in b.source.policy.items()}
-            # Close previous workers before changing the selected processing pair.
-            b.pool.shutdown(wait=True, cancel_futures=True)
+            # Waiting here froze every button while an unreachable robot timed out.
+            b.pool.shutdown(wait=False, cancel_futures=True)
+            b.source.alignment_method = 'manual' if b.source.alignment_verified else None
             new = SpotBackend('', visual, depth, b.source.alignment_verified,
                               b.human_pose, source=b.source,
                               model_settings=self.model_settings, models=self.models)
@@ -535,6 +562,75 @@ class Workspace:
             raise ValueError('Unknown workspace action')
         self.revision += 1
         self.message = session.message
+
+    def _record(self, enabled):
+        if not isinstance(enabled, bool):
+            raise ValueError('Recording enabled must be true or false')
+        active = self.recorder is not None and self.recorder.active
+        if not enabled:
+            if not active:
+                raise ValueError('No recording in progress')
+            self._finish_recording('operator')
+            return
+        if active:
+            raise ValueError('Already recording')
+        b = self.backend
+        if b is None:
+            raise ValueError('Connect sensors or start the offline demo before recording')
+        if not self.library.roots:
+            raise ValueError('No run directory configured; launch with --runs-dir PATH')
+        simulated = b.mode == 'SIMULATED'
+        self.recorder = SessionRecorder(self.library.roots[0], info={
+            'backend_mode': b.mode, 'world_frame': b.world_frame,
+            'visual_source': getattr(b, 'visual_source', 'synthetic-front'),
+            'depth_source': getattr(b, 'depth_source', 'synthetic-depth'),
+            'alignment_verified': simulated or b.source.alignment_verified,
+            # No robot address, account or credentials are recorded.
+            'evidence_note': ('Synthetic room: rendered camera, virtual robot pose and room-truth entities.'
+                              if simulated else
+                              'Spot cameras with measured odometry pose; entities are perception estimates.'
+                              ' Depth points are only logged after alignment was confirmed.')})
+
+    def _finish_recording(self, reason):
+        """Copy the final map here, where it is integrated; the recorder writes it."""
+        recorder, b = self.recorder, self.backend
+        if recorder is None or not recorder.active:
+            return
+        mapping = None
+        if b is not None and b.mapping is not None:
+            with getattr(b, 'map_lock', nullcontext()):
+                mapping = copy_map(b.mapping)
+        recorder.finish(mapping, b.entities if b is not None else [], reason)
+
+    def _sample_recording(self):
+        """Hand the latest processed view to the recorder without waiting on it."""
+        recorder, b = self.recorder, self.backend
+        if recorder is None or not recorder.active or b is None:
+            return
+        if recorder.limit_reached:
+            self._finish_recording('size limit')
+            return
+        now = time.monotonic()
+        if not recorder.due(now) or b.frame is None:
+            return
+        frame = b.frame
+        geometry = (b.mode == 'SIMULATED' or
+                    (frame.source != 'SPOT_RGB_ONLY_NO_WORLD_GEOMETRY' and b.source.alignment_verified))
+        with self.lock:
+            jpeg, cached = self.images.get('evidence'), self.cached
+        sample = {'host_s': now, 'jpeg': jpeg,
+                  'frame': replace(frame, rgb=frame.rgb.copy(), depth_m=frame.depth_m.copy())
+                           if geometry else None,
+                  'geometry': geometry, 'robot': cached.get('robot'),
+                  'entities': cached.get('entities', [])}
+        if jpeg is None:
+            sample['jpeg'] = encode(Image.fromarray(frame.rgb))
+        if b.mapping is not None and recorder.map_due(now):
+            with getattr(b, 'map_lock', nullcontext()):
+                positions, colors, _ = b.mapping.cloud()
+            sample['map_cloud'] = (positions, colors)
+            sample['topdown'] = (cached.get('mapping') or {}).get('topdown')
+        recorder.offer(sample)
 
     def _preload_models(self):
         """Load weights off the workspace thread so the first search does not stall."""
@@ -598,6 +694,7 @@ class Workspace:
             if b.error:
                 self.message = b.error
         self._publish()
+        self._sample_recording()
 
     def _publish(self):
         b, session = self.backend, self.interaction
@@ -626,6 +723,9 @@ class Workspace:
             'visual_source': getattr(b, 'visual_source', 'synthetic-front'),
             'depth_source': getattr(b, 'depth_source', 'synthetic-depth'),
             'alignment_verified': b.mode == 'SIMULATED' or b.source.alignment_verified,
+            'alignment': None if b.mode == 'SIMULATED' else {
+                'method': b.source.alignment_method,
+                'check': b.alignment.snapshot() if getattr(b, 'alignment', None) else None},
             'human_pose': getattr(b, 'human_pose', False),
             'timings': {**b.timings, 'interaction': session.timings.snapshot()},
             'modules': b.snapshot.get('telemetry', {}) if b.mode != 'SIMULATED' and b.snapshot else {},
@@ -717,6 +817,7 @@ class Workspace:
                 # Failure never permits continued supervised movement.
                 if self.navigation_controller:
                     self.control.stop()
+        self._finish_recording('console closed')
         if self.backend:
             self.backend.close()
 
@@ -724,3 +825,6 @@ class Workspace:
         self.stop()
         self.closed.set()
         self.thread.join(timeout=5)
+        if self.recorder is not None:
+            # Shutdown only: give the recorder time to write the final map.
+            self.recorder.join(timeout_s=15)

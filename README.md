@@ -26,7 +26,7 @@ To connect to a robot, start without `--demo`, then use **Connection**:
 .venv/bin/python scope_web.py
 ```
 
-Credentials are used for that connection and are not saved. The server listens on the loopback address only. Spot's Wi-Fi has no internet, so run one object search on a normal network first to download the detection models. After that SCOPE loads them from disk without network checks.
+The form is prefilled with the class address and username. If the password is saved in the macOS Keychain (see below), leave it blank; otherwise it is used for that connection and not saved. The server listens on the loopback address only. Detection models run on the laptop and need no network once downloaded. Spot's Wi-Fi has no internet, so run one object search on a normal network first to download the detection models. After that SCOPE loads them from disk without network checks.
 
 **macOS launcher.** Download the ZIP from GitHub, extract it, and run `zsh "Open SCOPE.command"`. It needs Git, Python 3.11 to 3.14 and an internet connection. It clones the repository to `~/Library/Application Support/SCOPE`, builds its own environment, and updates from `main` on each launch. The update logic was checked against a temporary Git repository; a fresh install from GitHub has not been run.
 
@@ -77,6 +77,22 @@ Driving unlocks only after fresh robot state confirms Spot is standing. Releasin
 
 The quoted numbers come from public indoor photos and the development Mac, not from Spot's cameras ([M4.5 report](docs/milestone-4.5.md)). When connected, the dialog also shows search and outline times measured on that connection. Applying a change clears the current target, keeps the map, and loads the new models in the background. GO must be stopped before you change models. In the offline demo, searches return fixture results, so settings are only saved for the next Spot connection.
 
+### Record a session
+
+The live map and entities are kept in memory and are lost when you disconnect, unless you record. **Record** in the top bar saves the session to a new `live-<date>-<time>` folder under the first `--runs-dir`:
+
+| File | Contents |
+| --- | --- |
+| `session.rrd` | Rerun recording at about 2 Hz: the processed camera image as shown on Live, depth points (every 6th pixel, up to 5 m), camera and robot pose, entity boxes, and the occupancy map every 10 s |
+| `map.npz`, `map_config.json` | Final occupancy map, readable by `scope view` and the History page |
+| `entities.json`, `manifest.json` | Final entity list, and the source pair, pose source, duration, sample count and stop reason |
+
+**Finish recording** writes the final map and entities. Disconnecting, changing the camera pair and quitting with Ctrl-C also finish it. A recording stops itself at 1 GB, and the status turns into a warning from 80%. Samples are dropped, not queued, if the disk falls behind, and recording never delays Stop or GO. In the demo the pose and entities are simulated; on Spot the pose is measured odometry, entities are perception estimates, and depth points are only logged after alignment is confirmed. The robot address and login are not recorded. If SCOPE is killed rather than closed, `session.rrd` keeps what was written so far (Rerun opens it, `rerun rrd verify` reports a missing footer) and the final map files are missing.
+
+The demo session (320×240 synthetic camera) records about 4 MB per minute. Spot's 640×480 cameras will be larger; that rate has not been measured.
+
+The **Record** button shows its label and timer above 1320 px wide, only a dot below that, and is hidden below 900 px, like **Connection**.
+
 ### Robot model and layout
 
 The **Robot model** panel draws the SDK model. In **Measured** mode it follows the 12 leg joint angles from fresh robot telemetry, but only when the robot's skeleton matches the SDK model. Body tilt is not measured, so the model is always drawn level. In the demo it shows the zero pose, labeled simulated.
@@ -89,18 +105,21 @@ Panels on Live and World can be rearranged: drag a panel bar onto another panel'
 
 ## Connecting to a real robot
 
-1. Connect to Spot's network and confirm the robot address with your instructor. The class handout uses `192.168.80.3`.
-2. Start the SDK's class E-stop in its own Terminal and leave it open. Space triggers it, `r` releases it, and `q` quits:
+Join Spot's Wi-Fi, make sure the tablet has powered off the motors and released control, then double-click **Start Spot.command** in the repository folder (or run `zsh "Start Spot.command"`).
 
-   ```sh
-   source .venv/bin/activate
-   python spot-sdk/python/examples/estop/estop_nogui.py 192.168.80.3
-   ```
+- The first time, it asks for the robot password and saves it in the macOS Keychain under "SCOPE Spot". The password is not written to any file.
+- That window becomes the class E-stop: space triggers it, `r` releases it, `q` quits. Keep it open.
+- SCOPE starts in the background (log in `~/Library/Logs/SCOPE/scope.log`) and opens in the browser. It connects in Robot control only after Spot reports this E-stop as active.
+- Press **Power On**, then **Stand**. Driving and GO stay locked until fresh robot state confirms Spot is standing still.
+- Quitting the E-stop, or the E-stop failing to start, also closes SCOPE. `MotorsOnError` means the tablet still has the motors on.
 
-3. Start the console in a second Terminal, open **Connection**, and enter the address, username and password. Choose Robot control only if you need to drive or GO, and tick the command authority box once the E-stop is running. Press **Power On**, then **Stand**; driving and GO stay locked until fresh robot state confirms Spot is standing still.
-4. The console starts on `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame` when the robot lists them. Until alignment is confirmed it runs camera-only, with no map or GO. For GO, open **Sources** and tick the alignment box only after checking on the robot that depth edges line up with the camera image. Choose a different pair there if needed.
+Set `SPOT_HOST` or `SPOT_USER` to use a different robot or account. To change the saved password, run `security delete-generic-password -s "SCOPE Spot" -a user` and start the launcher again.
 
-Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. The other fisheye cameras are shown at 2 Hz by default. One visual and depth pair feeds perception, and the depth list only offers the depth image registered to the chosen camera. Mapping and destination preview need physically verified alignment, calibration, timestamps and odom transforms. The alignment checkbox records that you checked it; it does not calibrate anything. The front panorama is an approximate stitch.
+To do it by hand instead, run the SDK's `estop_nogui.py` in one Terminal and `.venv/bin/python scope_web.py` in another, then use **Connection**.
+
+The console starts on `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame` when the robot lists them. For Spot's registered depth (`<camera>_depth_in_visual_frame`), SCOPE checks alignment automatically: it compares depth jumps with image edges at the true position and at 6 to 10 px shifts, and needs three passing frames. This check was tuned on synthetic frames and has not been validated on Spot captures. If it cannot confirm the pair, the camera shows depth as a colored overlay (red near, blue far). Tick the alignment box in **Sources** only if the colors sit on the right objects. The map and GO stay off until alignment is confirmed.
+
+Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. The other fisheye cameras are shown at 2 Hz by default. One visual and depth pair feeds perception, and the depth list only offers the depth image registered to the chosen camera. Mapping and destination preview need confirmed alignment plus valid calibration, timestamps and odom transforms. Neither the automatic check nor the checkbox calibrates anything. The front panorama is an approximate stitch.
 
 Returning to Observe or Dry run stops movement but keeps an existing command lease until you press **Disconnect**.
 
@@ -117,7 +136,7 @@ To run the tests:
 .venv/bin/python -m unittest discover
 ```
 
-The suite has 120 tests, and 3 of them skip unless optional datasets are present.
+The suite has 164 tests, and 3 of them skip unless optional datasets are present.
 
 ## Future plans
 

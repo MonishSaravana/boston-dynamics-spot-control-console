@@ -463,9 +463,49 @@ function renderEntity(ws) {
     );
 }
 
+function megabytes(bytes) {
+  return bytes >= 1e9
+    ? `${(bytes / 1e9).toFixed(1)} GB`
+    : `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`;
+}
+function updateRecording(ws) {
+  const rec = ws.recording;
+  const active = rec?.state === "recording";
+  const button = $("record-button");
+  button.disabled = rec?.state === "finishing" || (!active && !ws.available);
+  button.setAttribute("aria-pressed", String(active));
+  $("record-label").textContent = active
+    ? "Finish recording"
+    : rec?.state === "finishing"
+      ? "Saving…"
+      : "Record";
+  button.title = active
+    ? "Save the map and entities and close the recording. Does not stop the robot."
+    : `Save camera frames, depth points, robot pose and entities to the run folder, up to ${megabytes(rec?.max_bytes || 1e9)}`;
+  const status = $("record-status");
+  status.hidden = !rec;
+  if (!rec) return;
+  const seconds = Math.floor(rec.elapsed_s);
+  const clock = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  status.className =
+    "record-status" + (rec.error ? " failed" : rec.warning ? " warning" : "");
+  status.textContent =
+    rec.state === "failed"
+      ? `Recording failed · ${rec.error}`
+      : rec.state === "saved"
+        ? `Saved ${rec.folder}${rec.reason && rec.reason !== "operator" ? ` (${rec.reason})` : ""} · open in History`
+        : `${clock} · ${megabytes(rec.bytes)}${rec.warning ? ` · ${rec.warning}` : ""}`;
+  status.title = `${rec.path}\n${megabytes(rec.bytes)} of ${megabytes(rec.max_bytes)} · ${rec.samples} samples · ${rec.dropped} dropped`;
+}
+$("record-button").addEventListener("click", () =>
+  workspaceAction("record", {
+    enabled: workspaceState?.recording?.state !== "recording",
+  }),
+);
 function updateWorkspace(ws, control) {
   if (!ws) return;
   workspaceState = ws;
+  updateRecording(ws);
   $("control-mode").value = ws.mode;
   $("mode-description").textContent = control.demo
     ? ws.mode === "observe"
@@ -503,7 +543,10 @@ function updateWorkspace(ws, control) {
         ? "Simulated RGB-D pair"
         : `Age ${fixed(camera?.age_s, 1)} s · ${camera?.health || "Unavailable"}${camera?.error ? ` · ${camera.error.slice(0, 90)}` : ""}`;
       $("image-meta").title = camera?.error || "";
-      $("camera-caption").textContent = ws.depth_overlay
+      $("camera-caption").textContent =
+        ws.depth_overlay && ws.alignment?.check?.state === "checking"
+          ? "Depth overlay · checking alignment automatically (a few seconds)."
+          : ws.depth_overlay
         ? "Depth overlay: colored points should sit on the objects they belong to (red near, blue far). If they do, confirm alignment in Sources."
         : `Processing pair: ${ws.visual_source} + ${ws.depth_source || "no depth"}${ws.alignment_verified ? "" : " · alignment unverified"}`;
       $("camera-empty").textContent =
@@ -645,8 +688,10 @@ function updateWorkspace(ws, control) {
       ? "DEMO · DISABLED"
       : ws.navigation_active
         ? "GO ACTIVE"
-        : ws.mode === "observe"
-          ? "OBSERVE · NO CONTROL"
+        : !ws.available
+          ? "NOT CONNECTED"
+          : ws.mode === "observe"
+            ? "OBSERVE · NO CONTROL"
           : "DRY RUN · NO CONTROL";
   }
   $("model-status").textContent = control.model_status;
@@ -842,12 +887,19 @@ function buildPolicies(ws) {
   $("visual-source").value = ws.visual_source || "";
   buildDepthOptions(keys, ws.simulated, ws.depth_source);
   $("alignment-verified").checked = ws.alignment_verified;
+  const check = ws.alignment?.check;
   $("alignment-label").textContent = ws.simulated
     ? "Fixture alignment (synthetic)"
-    : "Alignment physically verified for this pair";
+    : ws.alignment?.method === "automatic"
+      ? "Alignment confirmed automatically for this pair"
+      : check?.state === "checking"
+        ? "Checking alignment automatically…"
+        : "Alignment verified for this pair";
   $("alignment-note").textContent = ws.simulated
     ? "Fixed RGB-D geometry supplied by the synthetic fixture."
-    : "Measured calibration, timestamps and odom transforms are still checked. No world geometry or destination is authorized from an unverified pair.";
+    : check
+      ? `${check.detail}. Calibration, timestamps and odom transforms are always checked.`
+      : "Spot's registered depth (…_depth_in_visual_frame) is checked automatically. For other pairs, compare the depth overlay with the camera and tick this box. Calibration, timestamps and odom transforms are always checked.";
   for (const id of [
     "visual-source",
     "depth-source",

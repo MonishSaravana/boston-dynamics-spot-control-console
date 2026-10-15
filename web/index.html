@@ -47,6 +47,19 @@
           ><span id="mode-pill">No robot</span
           ><span id="state-title" class="sr-only">Loading</span>
         </button>
+        <div class="record-wrap">
+          <button
+            id="record-button"
+            class="record-button"
+            type="button"
+            aria-pressed="false"
+            disabled
+          >
+            <span class="record-dot" aria-hidden="true"></span
+            ><span id="record-label">Record</span>
+          </button
+          ><a id="record-status" class="record-status" href="#runs" hidden></a>
+        </div>
         <button id="connection-tool" class="quiet-button" type="button">
           Connection
         </button>
@@ -955,8 +968,7 @@ Select an artifact to inspect it.</pre>
             id="robot-password"
             name="password"
             type="password"
-            autocomplete="current-password"
-            required="" /></label
+            autocomplete="current-password" /></label
         ><label
           >Connection mode<select id="connect-mode">
             <option value="observe">Observe · sensors only</option>
@@ -971,9 +983,8 @@ Select an artifact to inspect it.</pre>
           authority and the class E-stop is ready.</label
         >
         <p class="control-note">
-          Credentials are used for this connection and are not saved. Select the
-          visual/depth pair after connection.
-        </p>
+          Leave the password blank if it is saved in the Keychain (Start Spot.command
+          saves it). Typed passwords are used for this connection only.</p>
         <p id="connect-error" class="dialog-error" role="alert" hidden=""></p>
         <div class="dialog-actions">
           <button id="cancel-connect" type="button">Cancel</button

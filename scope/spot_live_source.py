@@ -227,6 +227,7 @@ class SpotReadOnlySource:
         self.errors = {}
         self.timings = TimingBook()
         self.alignment_verified = False
+        self.alignment_method = None
         self.acquisitions = {name: deque(maxlen=60) for name in self.sources}
         self.acquired_count = {name: 0 for name in self.sources}
         self.processed = {name: 0 for name in self.sources}
@@ -323,7 +324,8 @@ class SpotReadOnlySource:
             self.health[name] = "FAILED"
             self.errors[name] = f"{type(exc).__name__}: {exc}"
 
-    def rgbd(self, visual_name, depth_name):
+    def rgbd(self, visual_name, depth_name, assume_aligned=False):
+        """assume_aligned is only for the automatic alignment probe in console_backend."""
         if not self.policy[visual_name].process or not self.policy[depth_name].process:
             raise ValueError("Camera processing disabled")
         if self.health[visual_name] != "OK" or self.health[depth_name] != "OK":
@@ -340,7 +342,8 @@ class SpotReadOnlySource:
             if any(not 0 <= robot_now-image.acquisition_robot_s <= .6
                    for image in (visual, depth)):
                 raise ValueError("Camera acquisition stale")
-        return pair_to_frame(visual, depth, alignment_verified=self.alignment_verified)
+        return pair_to_frame(visual, depth,
+                             alignment_verified=self.alignment_verified or assume_aligned)
 
     def robot_pose(self):
         from bosdyn.client.frame_helpers import get_a_tform_b

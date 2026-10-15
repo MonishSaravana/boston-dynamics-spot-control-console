@@ -532,7 +532,16 @@ $("connect-button").addEventListener("click", async () => {
       }
     }
   } else {
-    $("connect-mode").value = state?.workspace?.mode || "observe";
+    const login = state?.workspace?.login || {};
+    $("robot-host").value ||= login.host || "";
+    $("robot-user").value ||= login.username || "";
+    $("robot-password").placeholder = login.password_saved
+      ? "Saved in Keychain · leave blank"
+      : "";
+    $("connect-mode").value =
+      state?.workspace?.mode === "observe" || !state?.workspace?.mode
+        ? "robot_control"
+        : state.workspace.mode;
     $("authority-row").hidden = $("connect-mode").value !== "robot_control";
     dialog.showModal();
   }
