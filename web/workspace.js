@@ -76,7 +76,22 @@ function drawMap(svg, ws, large = false) {
           "text-anchor": "middle",
           class: "map-empty",
         },
-        "No verified world geometry",
+        ws?.map_status || "No verified world geometry",
+      ),
+    );
+    return;
+  }
+  if (ws.map_status && !mapping.revision) {
+    svg.append(
+      el(
+        "text",
+        {
+          x: width / 2,
+          y: height / 2,
+          "text-anchor": "middle",
+          class: "map-empty",
+        },
+        ws.map_status,
       ),
     );
     return;
@@ -488,8 +503,9 @@ function updateWorkspace(ws, control) {
         ? "Simulated RGB-D pair"
         : `Age ${fixed(camera?.age_s, 1)} s · ${camera?.health || "Unavailable"}${camera?.error ? ` · ${camera.error.slice(0, 90)}` : ""}`;
       $("image-meta").title = camera?.error || "";
-      $("camera-caption").textContent =
-        `Processing pair: ${ws.visual_source} + ${ws.depth_source || "no depth"}${ws.alignment_verified ? "" : " · alignment unverified"}`;
+      $("camera-caption").textContent = ws.depth_overlay
+        ? "Depth overlay: colored points should sit on the objects they belong to (red near, blue far). If they do, confirm alignment in Sources."
+        : `Processing pair: ${ws.visual_source} + ${ws.depth_source || "no depth"}${ws.alignment_verified ? "" : " · alignment unverified"}`;
       $("camera-empty").textContent =
         "Perception display disabled or waiting for fresh frames";
       if (camera && (!camera.displayed || !camera.acquired)) {
@@ -629,7 +645,9 @@ function updateWorkspace(ws, control) {
       ? "DEMO · DISABLED"
       : ws.navigation_active
         ? "GO ACTIVE"
-        : "LOCKED";
+        : ws.mode === "observe"
+          ? "OBSERVE · NO CONTROL"
+          : "DRY RUN · NO CONTROL";
   }
   $("model-status").textContent = control.model_status;
   const mapKey = JSON.stringify([

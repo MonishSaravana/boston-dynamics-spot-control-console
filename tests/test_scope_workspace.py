@@ -253,3 +253,45 @@ class WorkspaceHttpTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LiveMapHelpTests(unittest.TestCase):
+    def backend(self, **kw):
+        import numpy as np
+        source = SimpleNamespace(alignment_verified=False, latest={},
+                                 status=lambda: {'frontleft_fisheye_image': {'health': 'OK'}})
+        values = dict(source=source, visual_source='frontleft_fisheye_image',
+                      depth_source='frontleft_depth_in_visual_frame', mapping=None, error=None)
+        values.update(kw)
+        return SimpleNamespace(**values)
+
+    def test_map_status_names_the_next_step(self):
+        from scope.workspace import map_status
+        b = self.backend(depth_source=None)
+        self.assertIn('choose the matching depth', map_status(b))
+        b = self.backend()
+        self.assertIn('confirm alignment', map_status(b))
+        b.source.alignment_verified = True
+        self.assertIn('Waiting for camera and depth', map_status(b))
+        b.mapping = SimpleNamespace(revision=3)
+        self.assertIsNone(map_status(b))
+        self.assertIn('unreachable', map_status(b, robot_failed=True))
+
+    def test_depth_overlay_tints_only_valid_depth_in_the_rotated_view(self):
+        import numpy as np
+        from PIL import Image
+        from scope.workspace import paint_depth
+        raw = np.zeros((4, 6, 1), np.uint16)
+        raw[0, 0, 0] = 500   # 0.5 m at the top-left of the unrotated depth image
+        depth = SimpleNamespace(pixels=raw, depth_scale=1000., receive_host_s=time.monotonic())
+        b = self.backend()
+        b.source.latest[b.depth_source] = depth
+        picture = Image.new('RGB', (4, 6), (100, 100, 100))   # upright view is 6 tall, 4 wide
+        paint_depth(picture, b)
+        pixels = np.asarray(picture)
+        changed = np.argwhere((pixels != 100).any(axis=2))
+        self.assertEqual(len(changed), 1)
+        self.assertGreater(pixels[tuple(changed[0])][0], 150)   # near depth is red
+        wrong = Image.new('RGB', (6, 4), (100, 100, 100))
+        paint_depth(wrong, b)
+        self.assertTrue((np.asarray(wrong) == 100).all())

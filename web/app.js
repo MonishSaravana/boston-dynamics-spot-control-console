@@ -213,7 +213,16 @@ function updateState(next) {
   $("connect-button").disabled = next.demo;
   $("demo-button").textContent = next.demo ? "Leave demo" : "Demo data";
   $("demo-button").disabled = next.connected || (ws?.available && !next.demo);
-  $("drive-state").textContent = next.armed ? "READY" : "LOCKED";
+  // Say why driving is locked, in the order the operator must fix it.
+  $("drive-state").textContent = next.armed
+    ? "READY"
+    : next.failed
+      ? "CONNECTION LOST · RECONNECT"
+      : !next.connected
+        ? "NOT CONNECTED"
+        : !next.powered
+          ? "LOCKED · POWER ON"
+          : "LOCKED · STAND";
   $("drive-state").classList.toggle("ready", next.armed);
   $("power-button").disabled =
     next.demo || !next.connected || next.powered || next.failed;

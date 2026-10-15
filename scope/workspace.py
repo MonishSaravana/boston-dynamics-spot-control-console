@@ -80,6 +80,40 @@ def default_pair(sources, visual=None, depth=None):
     return visual, depth
 
 
+def map_status(b, robot_failed=False):
+    """One plain reason the live map is empty, or None once it is building."""
+    camera = b.source.status().get(b.visual_source, {})
+    if robot_failed or camera.get('health') == 'FAILED':
+        return 'No map: Spot is unreachable. Check the Wi-Fi, then reconnect from Connection.'
+    if not b.depth_source:
+        return 'No map: choose the matching depth source in Sources.'
+    if not b.source.alignment_verified:
+        return 'No map: check the depth overlay on the camera, then confirm alignment in Sources.'
+    if b.mapping is None or b.mapping.revision < 1:
+        return f'Waiting for camera and depth. {b.error}' if b.error else 'Waiting for camera and depth.'
+    return None
+
+
+def paint_depth(picture, b):
+    """Tint the evidence image with registered depth so alignment can be judged by eye."""
+    from .spot_live_source import upright_quarter_turns
+    depth = b.source.latest.get(b.depth_source)
+    if depth is None or depth.pixels.dtype != np.uint16 or not depth.depth_scale:
+        return
+    if time.monotonic()-depth.receive_host_s > .6:
+        return
+    raw = np.rot90(depth.pixels[:, :, 0], upright_quarter_turns(b.visual_source))
+    if raw.shape[::-1] != picture.size:
+        return
+    meters = raw.astype(np.float32)/depth.depth_scale
+    valid = (raw > 0) & (meters < 6)
+    t = np.clip(meters/4, 0, 1)[..., None]
+    color = (1-t)*np.array([255., 70, 50]) + t*np.array([50., 140, 255])
+    rgb = np.asarray(picture.convert('RGB'), dtype=np.float32)
+    rgb[valid] = .45*rgb[valid] + .55*color[valid]
+    picture.paste(Image.fromarray(rgb.astype(np.uint8)))
+
+
 def clean(value):
     """JSON-safe, bounded telemetry. Non-finite measurements are unavailable."""
     if isinstance(value, dict):
@@ -599,6 +633,8 @@ class Workspace:
                         'topdown': mapping.topdown().tolist()} if mapping else None}
         if b.mode != 'SIMULATED':
             payload['timings']['sensors'] = b.source.timings.snapshot()
+            payload['map_status'] = map_status(b, self.control.failed and self.mode == 'robot_control')
+            payload['depth_overlay'] = bool(b.depth_source and not b.source.alignment_verified)
         images = {}
         if b.frame is not None:
             displayed = b.mode == 'SIMULATED' or (b.source.policy[b.visual_source].display and
@@ -611,6 +647,8 @@ class Workspace:
                     draw = ImageDraw.Draw(picture)
                     draw.rectangle(box, outline='#edc76e', width=3)
                     draw.text((box[0]+4, box[1]+4), c.entity_id, fill='#edc76e')
+                if payload.get('depth_overlay'):
+                    paint_depth(picture, b)
                 images['evidence'] = encode(picture)
         if b.mode != 'SIMULATED':
             manual_pictures = {}
