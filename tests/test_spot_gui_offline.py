@@ -16,7 +16,7 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from spot_control_gui import (HEIGHT_LIMIT_CM, MainWindow, SpotSession, UiSignals,
-                              decode_visual_image)
+                              decode_visual_image, describe_error)
 
 
 class GuiOfflineTests(unittest.TestCase):
@@ -212,6 +212,87 @@ class GuiOfflineTests(unittest.TestCase):
         self.assertFalse(reported[0][1])
         self.assertEqual(reported[0][2], set())
         self.assertTrue(reported[0][3])
+
+    def test_motors_off_in_robot_state_relocks_without_ending_session(self):
+        signals = UiSignals()
+        powered, disarmed = [], []
+        signals.powered.connect(powered.append)
+        signals.disarmed.connect(disarmed.append)
+        session = SpotSession(None, signals)
+        session.powered = session.armed = True
+        session.keys = {ord('W')}
+        state = robot_state_pb2.RobotState()
+        state.power_state.motor_power_state = robot_state_pb2.PowerState.MOTOR_POWER_STATE_OFF
+        state.estop_states.add().state = robot_state_pb2.EStopState.STATE_ESTOPPED
+        session._observe_power(state)
+        self.assertFalse(session.powered)
+        self.assertFalse(session.armed)
+        self.assertEqual(session.keys, set())
+        self.assertEqual(session.pending, 'stop')
+        self.assertFalse(session.closing.is_set())
+        self.assertEqual(powered, [False])
+        self.assertIn('E-stop', disarmed[0])
+        # Motors on again from the state stream: powered, but Stand is still needed.
+        state.power_state.motor_power_state = robot_state_pb2.PowerState.MOTOR_POWER_STATE_ON
+        session._observe_power(state)
+        self.assertTrue(session.powered)
+        self.assertFalse(session.armed)
+        self.assertEqual(powered, [False, True])
+
+    def test_short_stale_state_locks_then_unlocks_on_fresh_standing_state(self):
+        signals = UiSignals()
+        events = []
+        signals.disarmed.connect(lambda m: events.append(('disarmed', m)))
+        signals.armed.connect(lambda: events.append(('armed', None)))
+        signals.failed.connect(lambda m: events.append(('failed', m)))
+        session = SpotSession(None, signals)
+        session.powered = session.armed = True
+        session.keys = {ord('W')}
+        session.robot = SimpleNamespace(time_sync=SimpleNamespace(
+            robot_timestamp_from_local_secs=lambda _: SimpleNamespace(seconds=100, nanos=0)))
+
+        from spot_model_view import JOINT_NAMES
+
+        def state(age_s):
+            item = robot_state_pb2.RobotState()
+            item.power_state.motor_power_state = robot_state_pb2.PowerState.MOTOR_POWER_STATE_ON
+            item.behavior_state.state = robot_state_pb2.BehaviorState.STATE_STANDING
+            item.kinematic_state.acquisition_timestamp.seconds = 100 - int(age_s)
+            item.kinematic_state.velocity_of_body_in_odom.linear.x = 0.0
+            for name in JOINT_NAMES:
+                joint = item.kinematic_state.joint_states.add()
+                joint.name = name
+                joint.position.value = 0.1
+            return item
+        calls = []
+
+        def get_robot_state(timeout=None):
+            calls.append(timeout)
+            if len(calls) == 1:
+                return state(3)          # stale: lock movement
+            if len(calls) == 2:
+                self.assertEqual(session.pending, 'stop')
+                session.pending = None   # the command worker consumed the zero request
+            if len(calls) >= 4:
+                session.closing.set()    # end the loop after recovery
+            return state(0)              # fresh and stationary
+        session.state_client = Mock(get_robot_state=get_robot_state)
+        session._state_loop()
+        self.assertEqual([kind for kind, _ in events], ['disarmed', 'armed'])
+        self.assertIn('stale', events[0][1])
+        self.assertTrue(session.armed)
+        self.assertEqual(session.keys, set())
+
+    def test_errors_are_described_in_plain_words(self):
+        from bosdyn.client.auth import InvalidLoginError
+        from bosdyn.client.exceptions import UnableToConnectToRobotError
+        from bosdyn.client.lease import ResourceAlreadyClaimedError
+        from bosdyn.client.power import EstoppedError
+        self.assertIn('password', describe_error(InvalidLoginError(Mock(), 'bad')))
+        self.assertIn('tablet', describe_error(ResourceAlreadyClaimedError(Mock(), 'taken')))
+        self.assertIn('E-stop', describe_error(EstoppedError(Mock(), 'estop')))
+        self.assertIn("Wi-Fi", describe_error(UnableToConnectToRobotError('x')))
+        self.assertEqual(describe_error(RuntimeError('camera lost')), 'RuntimeError: camera lost')
 
 
 if __name__ == '__main__':

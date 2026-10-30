@@ -8,6 +8,7 @@ import io
 import json
 import math
 import secrets
+import signal
 import threading
 import time
 import webbrowser
@@ -47,8 +48,8 @@ class WebSignals:
     """Match the signal surface used by SpotSession without a Qt event loop."""
 
     def __init__(self, app, generation):
-        for name in ('status', 'connected', 'powered', 'armed', 'model_state', 'failed',
-                     'frame', 'panorama', 'panorama_status', 'posture_status',
+        for name in ('status', 'connected', 'powered', 'armed', 'disarmed', 'model_state',
+                     'failed', 'frame', 'panorama', 'panorama_status', 'posture_status',
                      'gesture_info', 'gesture_off'):
             setattr(self, name, Event(
                 lambda *args, name=name: app.receive(generation, name, *args)))
@@ -290,10 +291,13 @@ class WebControl:
                     gesture_expired = (self.gesture_active and
                                        time.monotonic() - self.last_presence > DRIVE_TIMEOUT)
                     if expired:
+                        # Zero velocity now. The control epoch is kept so a browser
+                        # that was merely slow (the laptop is also running the
+                        # detection models) resumes with its current keys instead
+                        # of being thrown out of the session.
                         self.held.clear()
                         self.controller = None
                         self.drive_seq = -1
-                        self.control_epoch += 1
                         session = self.session
                     elif gesture_expired:
                         self.gesture_active = False
@@ -400,13 +404,33 @@ class WebControl:
         if session is not None:
             session.set_auto_panorama(True)
 
-    def on_powered(self):
+    def on_powered(self, powered=True):
         with self.lock:
-            self.powered = True
+            self.powered = powered
+            if not powered:
+                self._lock_movement_locked()
+        if not powered:
+            self.workspace.stop()
 
     def on_armed(self):
         with self.lock:
             self.armed = True
+
+    def on_disarmed(self, message):
+        """Fresh standing state was lost (stale state, motors off); keep the connection."""
+        with self.lock:
+            self._lock_movement_locked()
+            self.status = message
+        self.workspace.stop()
+
+    def _lock_movement_locked(self):
+        self.armed = False
+        self.held.clear()
+        self.controller = None
+        self.drive_seq = -1
+        self.gesture_active = False
+        self.gesture_controller = None
+        self.control_epoch += 1
 
     def on_model_state(self, angles, message):
         with self.lock:
@@ -617,7 +641,8 @@ class Handler(BaseHTTPRequestHandler):
         from concurrent.futures import TimeoutError
         future = self.app.workspace.submit(name, data)
         try:
-            future.result(timeout=25)
+            # A robot connection waits up to 30 s for the session itself.
+            future.result(timeout=45 if name == 'connect' else 25)
         except TimeoutError:
             self.app.stop()
             raise ValueError('Workspace request timed out; movement authorization was cleared')
@@ -747,6 +772,11 @@ def main():
                          name='scope-auto-connect', daemon=True).start()
     if not args.no_browser:
         threading.Timer(0.3, lambda: webbrowser.open(url)).start()
+    # The launcher ends SCOPE with SIGTERM when the E-stop window quits. Shut
+    # down through the normal path so movement is zeroed, the lease is returned
+    # and a recording is finished.
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(
+        target=server.shutdown, name='scope-shutdown', daemon=True).start())
     try:
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:

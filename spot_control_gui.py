@@ -13,9 +13,16 @@ import bosdyn.client.util
 import cv2
 import numpy as np
 from bosdyn.api import image_pb2, robot_state_pb2
+from bosdyn.client.auth import InvalidLoginError
+from bosdyn.client.exceptions import (LeaseUseError, ProxyConnectionError, ResponseError,
+                                      TimedOutError, UnableToConnectToRobotError,
+                                      UnknownDnsNameError)
 from bosdyn.client.image import ImageClient, build_image_request
-from bosdyn.client.lease import LeaseClient, LeaseKeepAlive
-from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient
+from bosdyn.client.lease import LeaseClient, LeaseKeepAlive, ResourceAlreadyClaimedError
+from bosdyn.client.power import CommandTimedOutError as PowerTimedOutError, EstoppedError
+from bosdyn.client.robot import TimeSyncError
+from bosdyn.client.robot_command import (NotPoweredOnError, RobotCommandBuilder,
+                                         RobotCommandClient)
 from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.geometry import EulerZXY
 from PIL import Image
@@ -53,6 +60,37 @@ KEYS = {Qt.Key_W: (1, 0), Qt.Key_Up: (1, 0),
         Qt.Key_S: (-1, 0), Qt.Key_Down: (-1, 0),
         Qt.Key_A: (0, 1), Qt.Key_Left: (0, 1),
         Qt.Key_D: (0, -1), Qt.Key_Right: (0, -1)}
+# A robot-state gap shorter than this locks movement and unlocks again when fresh
+# standing state returns; a longer gap ends the session.
+STATE_GRACE_S = 10.0
+# Robot-side rejections of one request. The session survives these; network
+# errors still end it.
+REQUEST_ERRORS = (ResponseError, PowerTimedOutError)
+
+
+def describe_error(exc):
+    """Plain words for the SDK errors a class session is likely to meet."""
+    if isinstance(exc, InvalidLoginError):
+        return 'Wrong username or password'
+    if isinstance(exc, ResourceAlreadyClaimedError):
+        return 'Another client (usually the tablet) controls Spot; release control there'
+    if isinstance(exc, LeaseUseError):
+        return 'Another client (usually the tablet) took control of Spot; release control there and reconnect'
+    if isinstance(exc, EstoppedError):
+        return 'The E-stop is engaged; press r in the E-stop window, then try again'
+    if isinstance(exc, NotPoweredOnError):
+        return 'Motors are off; press Power On first'
+    if isinstance(exc, PowerTimedOutError):
+        return 'Spot did not finish powering on in time; check the E-stop window and try again'
+    if isinstance(exc, (UnableToConnectToRobotError, ProxyConnectionError, UnknownDnsNameError)):
+        return "Spot is unreachable; join Spot's Wi-Fi and check the address"
+    if isinstance(exc, TimedOutError):
+        return "Spot did not answer in time; check the Wi-Fi link"
+    if isinstance(exc, TimeSyncError):
+        return 'Clock sync with Spot failed; try connecting again'
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f'{name}: {text}' if text and text != name else name
 
 
 
@@ -77,8 +115,9 @@ def decode_visual_image(image):
 class UiSignals(QObject):
     status = Signal(str)
     connected = Signal(list, bool)
-    powered = Signal()
+    powered = Signal(bool)
     armed = Signal()
+    disarmed = Signal(str)
     model_state = Signal(object, str)
     failed = Signal(str)
     frame = Signal(object)
@@ -124,6 +163,7 @@ class SpotSession:
         self.model_reason = 'Robot model waiting for hardware configuration'
         self.powered = False
         self.armed = False
+        self.rearm_when_fresh = False
         self.last_motion_time = -float('inf')
         self.lease_keepalive = None
         self.robot = None
@@ -304,9 +344,8 @@ class SpotSession:
                 self.model_reason = f'Robot skeleton not verified; geometry hidden: {exc}'
             if not self.model_verified:
                 self.signals.model_state.emit(None, self.model_reason)
-            lease_client = self.robot.ensure_client(LeaseClient.default_service_name)
-            self.lease_keepalive = LeaseKeepAlive(lease_client, must_acquire=True,
-                                                   return_at_exit=True)
+            self.lease_keepalive = self._acquire_lease(
+                self.robot.ensure_client(LeaseClient.default_service_name))
             self.powered = self.robot.is_powered_on()
             self.signals.connected.emit(cameras, self.powered)
             self.signals.status.emit('Connected. Use Power On and Stand if needed; hold a direction key to move.')
@@ -341,31 +380,42 @@ class SpotSession:
                         self.signals.status.emit('Stopped.')
                     elif action == 'power':
                         self.signals.status.emit('Powering on…')
-                        self.robot.power_on(timeout_sec=20)
-                        self.powered = True
-                        self.signals.powered.emit()
-                        self.signals.status.emit('Powered on. Press Stand before driving.')
+                        try:
+                            self.robot.power_on(timeout_sec=20)
+                        except REQUEST_ERRORS as exc:
+                            self.signals.status.emit(f'Power on failed: {describe_error(exc)}')
+                        else:
+                            with self.lock:
+                                self.powered = True
+                            self.signals.powered.emit(True)
+                            self.signals.status.emit('Powered on. Press Stand before driving.')
                     elif action == 'stand':
                         if not self.powered:
                             self.signals.status.emit('Stand blocked: Spot is not powered on')
                         else:
                             with self.lock:
                                 self.armed = False
-                            self._zero()
-                            self._command(RobotCommandBuilder.synchro_stand_command(
-                                body_height=height,
-                                footprint_R_body=EulerZXY(roll=self.roll, pitch=self.pitch)))
-                            self.signals.status.emit('Stand requested; waiting for fresh standing telemetry…')
-                            if self._await_stand():
-                                with self.lock:
-                                    can_arm = not self.closing.is_set() and self.pending != 'stop'
-                                    self.armed = can_arm
-                                if can_arm:
-                                    self.signals.armed.emit()
-                                    self.signals.status.emit('Standing confirmed by fresh robot state')
+                            try:
+                                self._zero()
+                                self._command(RobotCommandBuilder.synchro_stand_command(
+                                    body_height=height,
+                                    footprint_R_body=EulerZXY(roll=self.roll, pitch=self.pitch)))
+                            except REQUEST_ERRORS as exc:
+                                self.signals.status.emit(f'Stand failed: {describe_error(exc)}')
                             else:
                                 self.signals.status.emit(
-                                    'Stand not confirmed; keyboard movement remains locked')
+                                    'Stand requested; waiting for fresh standing telemetry…')
+                                if self._await_stand():
+                                    with self.lock:
+                                        can_arm = (not self.closing.is_set() and
+                                                   self.pending != 'stop' and self.powered)
+                                        self.armed = can_arm
+                                    if can_arm:
+                                        self.signals.armed.emit()
+                                        self.signals.status.emit('Standing confirmed by fresh robot state')
+                                else:
+                                    self.signals.status.emit(
+                                        'Stand not confirmed; keyboard movement remains locked')
                     elif isinstance(action, tuple) and action[0] == 'posture':
                         _, new_height, new_roll, new_pitch = action
                         if not self.armed or not self.powered:
@@ -383,14 +433,19 @@ class SpotSession:
                                     self.signals.posture_status.emit(
                                         'Apply blocked: controls became active')
                                 else:
-                                    self._command(RobotCommandBuilder.synchro_stand_command(
-                                        body_height=new_height,
-                                        footprint_R_body=EulerZXY(
-                                            roll=new_roll, pitch=new_pitch)))
-                                    self.height, self.roll, self.pitch = (
-                                        new_height, new_roll, new_pitch)
-                                    self.signals.posture_status.emit(
-                                        'Standing posture requested; actual pose may be limited by Spot')
+                                    try:
+                                        self._command(RobotCommandBuilder.synchro_stand_command(
+                                            body_height=new_height,
+                                            footprint_R_body=EulerZXY(
+                                                roll=new_roll, pitch=new_pitch)))
+                                    except REQUEST_ERRORS as exc:
+                                        self.signals.posture_status.emit(
+                                            f'Apply failed: {describe_error(exc)}')
+                                    else:
+                                        self.height, self.roll, self.pitch = (
+                                            new_height, new_roll, new_pitch)
+                                        self.signals.posture_status.emit(
+                                            'Standing posture requested; actual pose may be limited by Spot')
                     next_command = time.monotonic() + COMMAND_PERIOD
                     with self.lock:
                         self.active_action = None
@@ -441,7 +496,7 @@ class SpotSession:
                 self.armed = False
                 self.gesture_mode = False
                 self.gesture_motion = 0
-            self.signals.failed.emit(f'{type(exc).__name__}: {exc}')
+            self.signals.failed.emit(describe_error(exc))
         finally:
             self.password = None
             self.closing.set()
@@ -452,6 +507,90 @@ class SpotSession:
                     pass  # The short command expiry remains the fallback.
             if self.lease_keepalive is not None:
                 self.lease_keepalive.shutdown()
+
+    def _acquire_lease(self, lease_client):
+        """Acquire the body lease, or take it from a client that still holds it.
+
+        Reaching this point means the class E-stop was set up with the motors
+        off, so taking a lease the tablet forgot to release cannot interrupt
+        motion. The tablet can take control back at any time.
+        """
+        try:
+            return LeaseKeepAlive(lease_client, must_acquire=True, return_at_exit=True)
+        except ResourceAlreadyClaimedError:
+            lease_client.take()
+            self.signals.status.emit('Took control from another client (usually the tablet). '
+                                     'It can take control back at any time.')
+            return LeaseKeepAlive(lease_client, return_at_exit=True)
+
+    def _observe_power(self, state):
+        """Follow motor power from robot state: the E-stop or tablet can cut it."""
+        motor = state.power_state.motor_power_state
+        PowerState = robot_state_pb2.PowerState
+        estopped = any(item.state == robot_state_pb2.EStopState.STATE_ESTOPPED
+                       for item in state.estop_states)
+        with self.lock:
+            if self.powered and motor in (PowerState.MOTOR_POWER_STATE_OFF,
+                                          PowerState.MOTOR_POWER_STATE_POWERING_OFF,
+                                          PowerState.MOTOR_POWER_STATE_ERROR):
+                self.powered = self.armed = self.gesture_mode = False
+                self.keys.clear()
+                self.gesture_motion = 0
+                self.pending = 'stop'
+                change = 'off'
+            elif (not self.powered and motor == PowerState.MOTOR_POWER_STATE_ON and
+                  self.active_action != 'power'):
+                self.powered = True
+                change = 'on'
+            else:
+                return
+        self.wakeup.set()
+        if change == 'off':
+            self.signals.powered.emit(False)
+            reason = ('the E-stop is engaged; press r in the E-stop window' if estopped
+                      else 'from the E-stop, the tablet or a fault')
+            self.signals.disarmed.emit(f'Motors are off ({reason}). Press Power On, then Stand.')
+        else:
+            self.signals.powered.emit(True)
+            self.signals.status.emit('Motors were powered on by another client. Press Stand before driving.')
+
+    def _lose_fresh_state(self, stale_since, reason):
+        """Lock movement while robot state is stale; the caller ends long gaps."""
+        with self.lock:
+            was_armed = self.armed
+            if was_armed:
+                self.keys.clear()
+                self.gesture_motion = 0
+                self.gesture_mode = False
+                self.armed = False
+                self.pending = 'stop'
+                self.rearm_when_fresh = True
+        if was_armed:
+            self.wakeup.set()
+            self.signals.disarmed.emit(
+                f'{reason}; movement is locked until fresh standing state returns')
+        return time.monotonic() if stale_since is None else stale_since
+
+    def _recover_fresh_state(self):
+        """Unlock again only on the same check Stand uses: fresh, standing, still."""
+        with self.lock:
+            due = self.rearm_when_fresh
+            self.rearm_when_fresh = False
+        if not due:
+            return
+        try:
+            stationary = self._robot_is_stationary()
+        except Exception:
+            stationary = False
+        with self.lock:
+            can_arm = (stationary and self.powered and not self.closing.is_set() and
+                       self.pending != 'stop')
+            self.armed = can_arm
+        if can_arm:
+            self.signals.armed.emit()
+            self.signals.status.emit('Fresh standing state is back; movement unlocked')
+        else:
+            self.signals.status.emit('Fresh robot state is back; press Stand to unlock movement')
 
     def _robot_is_stationary(self):
         """Fail closed if odometry velocity or its timestamp is unavailable."""
@@ -489,11 +628,13 @@ class SpotSession:
         return False
 
     def _state_loop(self):
-        """Publish fresh measured joint angles for the read-only URDF view."""
+        """Publish fresh joint angles, follow motor power, and lock on stale state."""
         from spot_model_view import JOINT_NAMES
+        stale_since = None
         while not self.closing.is_set():
             try:
                 state = self.state_client.get_robot_state(timeout=0.7)
+                self._observe_power(state)
                 kin = state.kinematic_state
                 robot_now = self._stamp_seconds(
                     self.robot.time_sync.robot_timestamp_from_local_secs(time.time()))
@@ -505,29 +646,27 @@ class SpotSession:
                         values if self.model_verified else None,
                         'Measured joint state • recent robot telemetry' if self.model_verified
                         else self.model_reason)
+                    if stale_since is not None:
+                        stale_since = None
+                        self._recover_fresh_state()
                 else:
                     self.signals.model_state.emit(None, 'Robot model waiting for fresh joint telemetry')
-                    with self.lock:
-                        if self.armed:
-                            self.keys.clear()
-                            self.gesture_motion = 0
-                            self.armed = False
-                            self.pending = 'stop'
-                            self.closing.set()
-                            self.signals.failed.emit('Robot state became stale; movement disabled')
-                            self.wakeup.set()
-                            return
+                    stale_since = self._lose_fresh_state(stale_since, 'Robot state is stale')
             except Exception as exc:
                 if self.closing.is_set():
                     return
                 self.signals.model_state.emit(None, f'Robot model telemetry unavailable: {exc}')
+                stale_since = self._lose_fresh_state(
+                    stale_since, f'Robot state unavailable ({describe_error(exc)})')
+            if stale_since is not None and time.monotonic() - stale_since > STATE_GRACE_S:
                 with self.lock:
                     self.keys.clear()
                     self.gesture_motion = 0
                     self.pending = 'stop'
                     self.armed = False
-                self.signals.failed.emit(f'Robot state connection problem: {exc}')
                 self.closing.set()
+                self.signals.failed.emit(
+                    f'Robot state was stale for over {STATE_GRACE_S:.0f} s; movement disabled')
                 self.wakeup.set()
                 return
             self.closing.wait(0.5)
@@ -990,6 +1129,7 @@ class MainWindow(QMainWindow):
         self.signals.connected.connect(self.on_connected)
         self.signals.powered.connect(self.on_powered)
         self.signals.armed.connect(self.on_armed)
+        self.signals.disarmed.connect(self.on_disarmed)
         self.signals.failed.connect(self.on_failed)
         self.signals.frame.connect(self.show_frame)
         self.signals.panorama.connect(self.show_panorama)
@@ -1244,12 +1384,31 @@ class MainWindow(QMainWindow):
         self.power.setEnabled(not powered and not self.demo)
         self.stand.setEnabled(powered and not self.demo)
 
-    def on_powered(self):
+    def on_powered(self, powered=True):
         if self.failed:
+            return
+        if not powered:
+            self.armed = False
+            self.stop_motion()
+            self.power.setEnabled(True)
+            self.stand.setEnabled(False)
+            self.apply_button.setEnabled(False)
+            self.gesture_toggle.setEnabled(False)
+            self._set_connection_state('connected')
             return
         self.power.setEnabled(False)
         self.stand.setEnabled(True)
         self._set_connection_state('powered')
+
+    def on_disarmed(self, message):
+        if self.failed:
+            return
+        self.armed = False
+        self.stop_motion()
+        self.apply_button.setEnabled(False)
+        self.gesture_toggle.setEnabled(False)
+        self._set_connection_state('powered' if self.session.powered else 'connected')
+        self.status.setText(message)
 
     def on_armed(self):
         if self.failed:

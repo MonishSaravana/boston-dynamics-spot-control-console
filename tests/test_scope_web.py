@@ -131,7 +131,8 @@ class BrowserConsoleTests(unittest.TestCase):
         app.session = fake
         app.connected = app.powered = app.armed = True
         try:
-            app.drive('tab-1', 1, ['w'], False, app.control_epoch)
+            epoch = app.control_epoch
+            app.drive('tab-1', 1, ['w'], False, epoch)
             deadline = time.monotonic() + DRIVE_TIMEOUT + 1
             while time.monotonic() < deadline and app.held:
                 time.sleep(0.02)
@@ -139,6 +140,35 @@ class BrowserConsoleTests(unittest.TestCase):
             self.assertIn(('action', 'stop'), fake.calls)
             self.assertTrue(any(call[0] == 'keys' and not call[1] and call[2]
                                 for call in fake.calls))
+            # A browser that was only slow resumes with its current keys.
+            self.assertEqual(app.control_epoch, epoch)
+            app.drive('tab-1', 2, ['w'], False, epoch)
+            self.assertEqual(app.held, {'w'})
+        finally:
+            app.close()
+
+    def test_motors_off_or_stale_state_locks_movement_and_keeps_connection(self):
+        app = WebControl()
+        fake = FakeSession()
+        app.session = fake
+        app.connected = app.powered = app.armed = True
+        try:
+            epoch = app.control_epoch
+            app.drive('tab-1', 1, ['w'], False, epoch)
+            app.on_powered(False)
+            self.assertFalse(app.powered)
+            self.assertFalse(app.armed)
+            self.assertFalse(app.held)
+            self.assertTrue(app.connected)
+            self.assertNotEqual(app.control_epoch, epoch)
+            with self.assertRaises(ValueError):
+                app.drive('tab-1', 2, ['w'], False, epoch)
+            app.on_powered(True)
+            app.on_armed()
+            app.on_disarmed('Robot state is stale; movement is locked')
+            self.assertFalse(app.armed)
+            self.assertTrue(app.powered)
+            self.assertIn('stale', app.snapshot()['status'])
         finally:
             app.close()
 

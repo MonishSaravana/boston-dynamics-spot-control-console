@@ -174,6 +174,37 @@ class SpotNormalizationTests(unittest.TestCase):
         self.assertAlmostEqual(float(frame.depth_m[24, 32]), 1.)
         self.assertEqual(frame.source, "SPOT_LIVE")
 
+    def test_registered_depth_shares_the_visual_projection(self):
+        from scope.data import Intrinsics
+        from scope.spot_live_source import shared_distortion
+        K = Intrinsics(64, 48, 50., 50., 31.5, 23.5)
+        fisheye = (.02, -.01, .001, 0.)
+
+        def image(model, distortion, K=K, depth=False):
+            pixels = (np.full((48, 64, 1), 1000, np.uint16) if depth else
+                      np.full((48, 64, 1), 120, np.uint8))
+            return SpotImage("depth" if depth else "visual", pixels, 100., 10., 123.,
+                             "camera", np.eye(4), "odom", K, 1000. if depth else None,
+                             12., 2., model, distortion)
+        visual = image("kannala_brandt", fisheye)
+        # Depth described as pinhole, or with no model at all, inherits the fisheye.
+        for depth in (image("pinhole", (), depth=True), image("unavailable", (), K=None, depth=True)):
+            self.assertEqual(shared_distortion(visual, depth), fisheye)
+            frame = pair_to_frame(visual, depth, alignment_verified=True)
+            frame.validate()
+            self.assertEqual(frame.rgb.shape[:2], frame.depth_m.shape)
+        # Pinhole image with fisheye depth uses the depth's coefficients.
+        self.assertEqual(shared_distortion(image("pinhole", ()), image("kannala_brandt", fisheye, depth=True)),
+                         fisheye)
+        # Two plain pinhole sources need no rectification.
+        self.assertEqual(shared_distortion(image("pinhole", ()), image("pinhole", (), depth=True)), ())
+        # Disagreement is still refused.
+        other = Intrinsics(64, 48, 58., 50., 31.5, 23.5)
+        with self.assertRaisesRegex(ValueError, "intrinsics differ"):
+            shared_distortion(visual, image("pinhole", (), K=other, depth=True))
+        with self.assertRaisesRegex(ValueError, "coefficients differ"):
+            shared_distortion(visual, image("kannala_brandt", (0., 0., 0., 0.), depth=True))
+
     def test_paired_sources_are_requested_together(self):
         from bosdyn.api import image_pb2
         class Client:

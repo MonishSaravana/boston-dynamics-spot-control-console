@@ -150,6 +150,36 @@ def normalize_response(response, source, *, root_frame="odom", rpc_ms=0.,
         source.WhichOneof("camera_models") or "unavailable", _distortion(source))
 
 
+def shared_distortion(visual: SpotImage, depth: SpotImage):
+    """The one projection both images use, as Kannala-Brandt coefficients or ().
+
+    Spot renders `<camera>_depth_in_visual_frame` into the visual camera's own
+    pixel grid, so a registered pair shares a single projection even when the
+    two sources describe it with different camera models (fisheye for the
+    image, pinhole for the depth, or no model at all for the depth). The
+    caller has already required the same sensor frame, resolution and
+    extrinsics. Here any pinhole intrinsics both sources report must agree,
+    and any fisheye coefficients both report must agree; the fisheye
+    description wins because it is the more complete one.
+    """
+    if visual.camera_model not in ("pinhole", "kannala_brandt"):
+        raise ValueError("Unsupported visual camera projection for RGB-D geometry")
+    K, D = visual.intrinsics, depth.intrinsics
+    if D is not None and K is not None:
+        scale = max(abs(K.fx), abs(K.fy), 1e-6)
+        if (abs(K.fx-D.fx) > .01*scale or abs(K.fy-D.fy) > .01*scale or
+                abs(K.cx-D.cx) > 2. or abs(K.cy-D.cy) > 2.):
+            raise ValueError("Registered depth intrinsics differ from the visual camera")
+    models = {visual.camera_model, depth.camera_model}
+    if not models <= {"pinhole", "kannala_brandt", "unavailable"} and D is not None:
+        raise ValueError("Unsupported depth camera projection for RGB-D geometry")
+    coefficients = [tuple(float(v) for v in image.distortion)
+                    for image in (visual, depth) if image.camera_model == "kannala_brandt"]
+    if len(coefficients) == 2 and not np.allclose(coefficients[0], coefficients[1], atol=1e-6):
+        raise ValueError("Registered depth fisheye coefficients differ from the visual camera")
+    return coefficients[0] if coefficients else ()
+
+
 def pair_to_frame(visual: SpotImage, depth: SpotImage, *, alignment_verified=False,
                   max_pair_offset_s=.05):
     """Only verified registered depth may authorize world geometry."""
@@ -181,13 +211,12 @@ def pair_to_frame(visual: SpotImage, depth: SpotImage, *, alignment_verified=Fal
     meters = raw.astype(np.float32) / depth.depth_scale
     meters[raw == 0] = np.nan
     K = visual.intrinsics
-    if visual.camera_model == "kannala_brandt":
-        if depth.camera_model != "kannala_brandt" or depth.distortion != visual.distortion:
-            raise ValueError("Registered depth fisheye calibration differs from visual")
+    distortion = shared_distortion(visual, depth)
+    if distortion:
         import cv2
         size = (K.width, K.height)
         matrix = np.array([[K.fx, 0, K.cx], [0, K.fy, K.cy], [0, 0, 1]], dtype=np.float64)
-        D = np.asarray(visual.distortion, dtype=np.float64)
+        D = np.asarray(distortion, dtype=np.float64)
         new_matrix = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
             matrix, D, size, np.eye(3), balance=0.)
         map_x, map_y = cv2.fisheye.initUndistortRectifyMap(
@@ -199,8 +228,6 @@ def pair_to_frame(visual: SpotImage, depth: SpotImage, *, alignment_verified=Fal
         K = Intrinsics(K.width, K.height, float(new_matrix[0, 0]),
                        float(new_matrix[1, 1]), float(new_matrix[0, 2]),
                        float(new_matrix[1, 2]))
-    elif visual.camera_model != "pinhole" or depth.camera_model not in ("pinhole", "unavailable"):
-        raise ValueError("Unsupported camera projection for RGB-D geometry")
     frame = RgbdFrame(rgb.copy(), meters, K, visual.T_root_sensor,
         visual.acquisition_robot_s, depth.acquisition_robot_s, "SPOT_LIVE",
         f"{visual.source}:{visual.acquisition_robot_s:.6f}")

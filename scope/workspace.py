@@ -364,14 +364,17 @@ class Workspace:
             if data.get('command_authority') is not True:
                 raise ValueError('Robot control requires explicit command authority and the class E-stop')
             self.control.connect(hostname, username, password)
-            deadline = time.monotonic() + 20
+            # Authentication, clock sync, camera discovery and the lease; clock
+            # sync alone may take several seconds over Wi-Fi.
+            deadline = time.monotonic() + 30
             while not self.control.connected and not self.control.failed:
                 if self.closed.wait(.1) or time.monotonic() > deadline or self.epoch != epoch:
                     self.control.disconnect()
                     raise ValueError('Connection cancelled or timed out')
             if self.control.failed:
+                reason = self.control.status
                 self.control.disconnect()
-                raise ValueError('Robot connection failed; check the connection status')
+                raise ValueError(f'Robot connection failed: {reason}')
             from bosdyn.client.image import ImageClient
             session = self.control.session
             source = SpotReadOnlySource(session.robot.ensure_client(ImageClient.default_service_name),
@@ -532,7 +535,7 @@ class Workspace:
             b.source.alignment_verified = data.get('alignment_verified') is True
             policies = {name: replace(policy) for name, policy in b.source.policy.items()}
             # Waiting here froze every button while an unreachable robot timed out.
-            b.pool.shutdown(wait=False, cancel_futures=True)
+            b.stop_acquisition()
             b.source.alignment_method = 'manual' if b.source.alignment_verified else None
             new = SpotBackend('', visual, depth, b.source.alignment_verified,
                               b.human_pose, source=b.source,

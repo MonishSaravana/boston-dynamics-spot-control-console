@@ -54,11 +54,11 @@ The Spot SDK, model bundles, credentials and camera captures are not in this rep
 | --- | --- |
 | Speed limit | 0.05 to 0.35 m/s, starts at 0.20 m/s |
 | Drive | Hold W/A/S/D, the arrow keys, or an on-screen direction button |
-| Command expiry | 0.35 s without an update. The browser presence timeout is 0.30 s. |
+| Command expiry | 0.35 s without an update. Driving also stops after 0.30 s without a browser update and resumes when the updates continue. |
 | Height offset | 0 to +10 cm |
 | Roll and pitch | ±5° each |
 
-Driving unlocks only after fresh robot state confirms Spot is standing. Releasing a key requests zero velocity. Stop, focus loss, a hidden tab, a connection failure and shutdown all clear movement. The posture sliders set a request for **Apply**; they are not measured state, and Spot may not move by exactly the amount asked. The 0 to 10 cm and ±5° limits are conservative app limits, not verified safe ranges for this robot.
+Driving unlocks only after fresh robot state confirms Spot is standing. Releasing a key requests zero velocity. Stop, focus loss, a hidden tab, a connection failure and shutdown all clear movement. If robot state stops arriving or goes stale, movement locks and unlocks again on its own once fresh state shows Spot standing still; a gap longer than 10 s ends the connection. If the motors go off (the E-stop, the tablet or a fault), the console relocks and asks for **Power On** again. A Power On, Stand or Apply request that Spot rejects is reported in the status line without dropping the connection. The posture sliders set a request for **Apply**; they are not measured state, and Spot may not move by exactly the amount asked. The 0 to 10 cm and ±5° limits are conservative app limits, not verified safe ranges for this robot.
 
 **STOP MOVEMENT** requests zero velocity and clears any approval. It is not the class E-stop.
 
@@ -107,11 +107,15 @@ Panels on Live and World can be rearranged: drag a panel bar onto another panel'
 
 Join Spot's Wi-Fi, make sure the tablet has powered off the motors and released control, then double-click **Start Spot.command** in the repository folder (or run `zsh "Start Spot.command"`).
 
-- The first time, it asks for the robot password and saves it in the macOS Keychain under "SCOPE Spot". The password is not written to any file.
+- It first checks this laptop (the `.venv` environment, the SDK checkout, no second copy running) and that Spot answers at the robot address, and says what to fix if not.
+- The first time, it asks for the robot password and saves it in the macOS Keychain under "SCOPE Spot". The password is not written to any file. The launcher hands it to SCOPE through that process's environment, so SCOPE does not need Keychain access of its own.
 - That window becomes the class E-stop: space triggers it, `r` releases it, `q` quits. Keep it open.
-- SCOPE starts in the background (log in `~/Library/Logs/SCOPE/scope.log`) and opens in the browser. It connects in Robot control only after Spot reports this E-stop as active.
-- Press **Power On**, then **Stand**. Driving and GO stay locked until fresh robot state confirms Spot is standing still.
-- Quitting the E-stop, or the E-stop failing to start, also closes SCOPE. `MotorsOnError` means the tablet still has the motors on.
+- SCOPE starts in the background (log in `~/Library/Logs/SCOPE/scope.log`) and opens in the browser. The connection panel shows what it is waiting for. It connects in Robot control only after Spot reports this E-stop as active.
+- If the tablet still holds control, SCOPE takes the lease and says so. The motors are already off at that point, because the E-stop setup requires it, and the tablet can take control back at any time.
+- Press **Power On**, then **Stand**. Driving and GO stay locked until fresh robot state confirms Spot is standing still. If Power On is refused because the E-stop is engaged, press `r` in the E-stop window and try again; the connection stays up.
+- Quitting the E-stop, or the E-stop failing to start, also closes SCOPE, which sends a final zero-velocity request and returns the lease. `MotorsOnError` means the tablet still has the motors on.
+
+These connection paths were exercised with fakes in the test suite and in offline runs, not yet on a robot.
 
 Set `SPOT_HOST` or `SPOT_USER` to use a different robot or account. To change the saved password, run `security delete-generic-password -s "SCOPE Spot" -a user` and start the launcher again.
 
@@ -119,7 +123,7 @@ To do it by hand instead, run the SDK's `estop_nogui.py` in one Terminal and `.v
 
 The console starts on `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame` when the robot lists them. For Spot's registered depth (`<camera>_depth_in_visual_frame`), SCOPE checks alignment automatically: it compares depth jumps with image edges at the true position and at 6 to 10 px shifts, and needs three passing frames. This check was tuned on synthetic frames and has not been validated on Spot captures. If it cannot confirm the pair, the camera shows depth as a colored overlay (red near, blue far). Tick the alignment box in **Sources** only if the colors sit on the right objects. The map and GO stay off until alignment is confirmed.
 
-Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. The other fisheye cameras are shown at 2 Hz by default. One visual and depth pair feeds perception, and the depth list only offers the depth image registered to the chosen camera. Mapping and destination preview need confirmed alignment plus valid calibration, timestamps and odom transforms. Neither the automatic check nor the checkbox calibrates anything. The front panorama is an approximate stitch.
+Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. The other fisheye cameras are shown at 2 Hz by default. One visual and depth pair feeds perception, and the depth list only offers the depth image registered to the chosen camera. Mapping and destination preview need confirmed alignment plus valid calibration, timestamps and odom transforms. Spot renders the registered depth into the visual camera's pixel grid, so the pair is treated as one projection whichever camera model each source reports: if either reports fisheye (Kannala-Brandt) coefficients, both images are rectified with them; pinhole intrinsics the two sources both report must agree, otherwise the pair is refused. Neither the automatic check nor the checkbox calibrates anything. The front panorama is an approximate stitch.
 
 Returning to Observe or Dry run stops movement but keeps an existing command lease until you press **Disconnect**.
 
@@ -136,7 +140,7 @@ To run the tests:
 .venv/bin/python -m unittest discover
 ```
 
-The suite has 164 tests, and 3 of them skip unless optional datasets are present.
+The suite has 172 tests, and 3 of them skip unless optional datasets are present.
 
 ## Future plans
 

@@ -6,6 +6,7 @@ once with `Start Spot.command`, or:
 
     security add-generic-password -s "SCOPE Spot" -a user -w
 """
+import os
 import subprocess
 import sys
 
@@ -13,9 +14,14 @@ DEFAULT_HOST = "192.168.80.3"
 DEFAULT_USER = "user"
 KEYCHAIN_SERVICE = "SCOPE Spot"
 ESTOP_ENDPOINT_NAME = "Estop NoGUI"   # Name used by the SDK's estop_nogui.py example.
+PASSWORD_ENV = "SPOT_PASSWORD"        # Set for this process only by Start Spot.command.
 
 
 def saved_password(username):
+    """The launcher's environment first, then the macOS Keychain."""
+    from_env = os.environ.get(PASSWORD_ENV)
+    if from_env:
+        return from_env
     if sys.platform != "darwin" or not username:
         return None
     try:
@@ -40,7 +46,9 @@ def estop_active(status, name=ESTOP_ENDPOINT_NAME, max_silence_s=2.):
 def wait_for_estop(hostname, username, password, closed, report, interval_s=2.):
     """Block until the class E-stop window is active, or `closed` is set."""
     import bosdyn.client
+    from bosdyn.client.auth import InvalidLoginError
     from bosdyn.client.estop import EstopClient
+    from bosdyn.client.exceptions import RpcError
     client = None
     while not closed.is_set():
         try:
@@ -51,6 +59,14 @@ def wait_for_estop(hostname, username, password, closed, report, interval_s=2.):
             if estop_active(client.get_status(timeout=2)):
                 return True
             report("Waiting for the E-stop window to start…")
+        except InvalidLoginError:
+            report("Spot rejected the saved password. Fix it with "
+                   "'security delete-generic-password -s \"SCOPE Spot\" -a user' "
+                   "and start again, or use Connection with the right password.")
+            return False
+        except RpcError:
+            client = None
+            report(f"Waiting for Spot at {hostname}. Join Spot's Wi-Fi if this stays here.")
         except Exception as exc:
             client = None
             report(f"Waiting for Spot at {hostname}: {type(exc).__name__}")
@@ -63,8 +79,11 @@ def auto_connect(app, hostname, username):
     workspace = app.workspace
 
     def report(message):
+        # The connection panel shows app.status; the footer shows workspace.message.
         with workspace.lock:
             workspace.message = message
+        with app.lock:
+            app.status = message
     password = saved_password(username)
     if not password:
         report("No saved Spot password; use Connection, or run Start Spot.command once")

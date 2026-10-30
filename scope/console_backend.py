@@ -162,8 +162,13 @@ class SpotBackend:
         self.frame_receipts = {}
         self.entities = []
         self.mapping = None
-        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scope-sensors")
+        # Cameras and robot pose are polled continuously on their own threads,
+        # so freshness checks depend on the network, not on how long a
+        # perception tick takes on the workspace thread.
+        self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="scope-sensors")
+        self.acquisition_stop = threading.Event()
         self.pending = None
+        self.acquisition_error = None
         self.error = None
         self.human_pose = human_pose
         self.timings = {}
@@ -174,14 +179,36 @@ class SpotBackend:
     def camera_status(self):
         return self.source.status()
 
-    def _read(self):
-        self.source.poll()
-        try:
-            pose = self.source.robot_pose()
-        except Exception as exc:
-            pose = None
-            self.error = f"Robot pose: {exc}"
-        return pose
+    def _acquire_images(self):
+        """Poll every enabled camera at its own rate until the backend stops."""
+        while not self.acquisition_stop.is_set():
+            try:
+                self.source.poll()
+            except Exception as exc:
+                self.acquisition_error = f"Sensor acquisition: {type(exc).__name__}: {exc}"
+            self.acquisition_stop.wait(.02)
+
+    def _acquire_pose(self, period_s=.1):
+        """Refresh the measured body pose at about 10 Hz."""
+        while not self.acquisition_stop.is_set():
+            start = time.monotonic()
+            try:
+                self.robot = self.source.robot_pose()
+                self.acquisition_error = None
+            except Exception as exc:
+                self.robot = None
+                self.acquisition_error = f"Robot pose: {exc}"
+            self.acquisition_stop.wait(max(.01, period_s-(time.monotonic()-start)))
+
+    def _start_acquisition(self):
+        if self.pending is None and not self.acquisition_stop.is_set():
+            self.pending = [self.pool.submit(self._acquire_images),
+                            self.pool.submit(self._acquire_pose)]
+
+    def stop_acquisition(self):
+        """Let the polling threads finish their current RPC and exit."""
+        self.acquisition_stop.set()
+        self.pool.shutdown(wait=False, cancel_futures=True)
 
     def _init_pipeline(self, frame, has_geometry):
         from .model_settings import REFRESH_S, query_factory, segmenter_factory
@@ -233,16 +260,8 @@ class SpotBackend:
             state.cpu_ms.clear()
 
     def tick(self):
-        if self.pending is None:
-            self.pending = self.pool.submit(self._read)
-        if not self.pending.done():
-            return self.frame
-        try:
-            self.robot = self.pending.result()
-            self.error = None if self.robot else self.error
-        except Exception as exc:
-            self.error = f"Sensor acquisition: {type(exc).__name__}: {exc}"
-        self.pending = self.pool.submit(self._read)
+        self._start_acquisition()
+        self.error = self.acquisition_error
         visual = self.source.latest.get(self.visual_source)
         if visual is None or not self.source.policy[self.visual_source].process:
             return self.frame
@@ -417,7 +436,7 @@ class SpotBackend:
         # robot is unreachable, so it must not hold up the console's request thread.
         if self.mode == "SPOT_SUPERVISED":
             self.executor.stop()
-        self.pool.shutdown(wait=False, cancel_futures=True)
+        self.stop_acquisition()
         threading.Thread(target=self._finish_close, name="scope-backend-close", daemon=True).start()
 
     def _finish_close(self):

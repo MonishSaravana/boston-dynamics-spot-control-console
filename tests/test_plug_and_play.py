@@ -116,6 +116,7 @@ class CloseTests(unittest.TestCase):
         backend.mode = "SPOT_SUPERVISED"
         backend.executor = Mock()
         backend.pool = Mock()
+        backend.acquisition_stop = threading.Event()
         backend.lease_keepalive = None
         backend.pipeline = SimpleNamespace(close=lambda: time.sleep(2))
         start = time.monotonic()
@@ -146,7 +147,8 @@ class LoginTests(unittest.TestCase):
         done = Future()
         done.set_result(None)
         workspace = SimpleNamespace(lock=threading.RLock(), message="", submit=Mock(return_value=done))
-        app = SimpleNamespace(workspace=workspace, closed=threading.Event())
+        app = SimpleNamespace(workspace=workspace, closed=threading.Event(),
+                              lock=threading.RLock(), status="")
         with patch.object(robot_login, "saved_password", return_value="pw"), \
                 patch.object(robot_login, "wait_for_estop", return_value=True):
             self.assertTrue(robot_login.auto_connect(app, "192.168.80.3", "user"))
@@ -157,6 +159,51 @@ class LoginTests(unittest.TestCase):
             workspace.submit.reset_mock()
             self.assertFalse(robot_login.auto_connect(app, "192.168.80.3", "user"))
             workspace.submit.assert_not_called()
+
+    def test_launcher_environment_password_wins_over_keychain(self):
+        with patch.dict("os.environ", {robot_login.PASSWORD_ENV: "from-launcher"}), \
+                patch.object(robot_login.subprocess, "run") as run:
+            self.assertEqual(robot_login.saved_password("user"), "from-launcher")
+            run.assert_not_called()
+        with patch.dict("os.environ", {robot_login.PASSWORD_ENV: ""}), \
+                patch.object(robot_login.subprocess, "run",
+                             return_value=SimpleNamespace(returncode=0, stdout="kc\n")), \
+                patch.object(robot_login.sys, "platform", "darwin"):
+            self.assertEqual(robot_login.saved_password("user"), "kc")
+
+    def test_auto_connect_reports_progress_on_the_connection_panel(self):
+        workspace = SimpleNamespace(lock=threading.RLock(), message="", submit=Mock())
+        app = SimpleNamespace(workspace=workspace, closed=threading.Event(),
+                              lock=threading.RLock(), status="")
+        with patch.object(robot_login, "saved_password", return_value=None):
+            self.assertFalse(robot_login.auto_connect(app, "192.168.80.3", "user"))
+        self.assertIn("No saved Spot password", app.status)
+        self.assertEqual(app.status, workspace.message)
+
+
+class AcquisitionTests(unittest.TestCase):
+    def test_pose_and_cameras_are_polled_off_the_tick_thread(self):
+        from scope.live_interaction import RobotPose
+        source = FakeSource()
+        polls = []
+        source.poll = lambda: polls.append(time.monotonic()) or source.latest
+        source.robot_pose = lambda: RobotPose(1., 2., 0., time.monotonic(), "odom")
+        backend = SpotBackend("", VISUAL, DEPTH, source=source)
+        try:
+            backend.tick()
+            deadline = time.monotonic()+3
+            while time.monotonic() < deadline and (backend.robot is None or len(polls) < 5):
+                time.sleep(.02)
+            self.assertIsNotNone(backend.robot)
+            self.assertGreaterEqual(len(polls), 5)   # cameras keep polling without tick()
+            self.assertIsNone(backend.acquisition_error)
+        finally:
+            backend.close()
+        self.assertTrue(backend.acquisition_stop.is_set())
+        time.sleep(.1)
+        count = len(polls)
+        time.sleep(.2)
+        self.assertEqual(len(polls), count)   # polling stopped with the backend
 
 
 if __name__ == "__main__":
