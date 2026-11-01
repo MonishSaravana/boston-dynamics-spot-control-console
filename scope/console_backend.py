@@ -138,7 +138,8 @@ class SpotBackend:
         if alignment_verified:
             self.source.alignment_method = self.source.alignment_method or "manual"
         from .alignment import AlignmentCheck, registered_depth_for
-        # Spot's own registered pair can be confirmed automatically; see alignment.py.
+        # Spot's own registered pair is checked automatically and used either
+        # way after a bounded check; see alignment.py.
         self.alignment = (AlignmentCheck() if depth_source and not alignment_verified and
                           depth_source == registered_depth_for(visual_source) else None)
         self.last_alignment_probe_s = 0.
@@ -235,6 +236,35 @@ class SpotBackend:
         self.mapping = self.pipeline.core.mapping
         self.mapping.world_frame = self.world_frame if has_geometry else None
 
+    def _check_alignment(self):
+        """Run the advisory alignment check; never hold geometry back for long.
+
+        While checking, probe about twice a second. Once the check is
+        inconclusive the pair is used as Spot delivers it ("assumed") and the
+        probe continues at a low rate so a later pass can still confirm it.
+        """
+        check = self.alignment
+        if check is None or check.state == "passed":
+            return
+        state = check.give_up_if_slow()
+        interval = .4 if state == "checking" else 2.
+        if time.monotonic()-self.last_alignment_probe_s >= interval:
+            self.last_alignment_probe_s = time.monotonic()
+            try:
+                probe = self.source.rgbd(self.visual_source, self.depth_source, assume_aligned=True)
+                state = check.observe(probe)
+            except Exception as exc:
+                self.error = f"Alignment check: {exc}"
+        if state == "passed":
+            if not self.source.alignment_verified:
+                self._reset_pipeline()
+            self.source.alignment_verified = True
+            self.source.alignment_method = "automatic"
+        elif state == "assumed" and not self.source.alignment_verified:
+            self.source.alignment_verified = True
+            self.source.alignment_method = "assumed"
+            self._reset_pipeline()
+
     def _reset_pipeline(self):
         """Start perception again with geometry; the old one shuts down off-thread."""
         old, self.pipeline, self.mapping = self.pipeline, None, None
@@ -266,17 +296,7 @@ class SpotBackend:
         if visual is None or not self.source.policy[self.visual_source].process:
             return self.frame
         has_geometry = False
-        checking = self.alignment is not None and self.alignment.give_up_if_slow() == "checking"
-        if checking and time.monotonic()-self.last_alignment_probe_s >= .4:
-            self.last_alignment_probe_s = time.monotonic()
-            try:
-                probe = self.source.rgbd(self.visual_source, self.depth_source, assume_aligned=True)
-                if self.alignment.observe(probe) == "passed":
-                    self.source.alignment_verified = True
-                    self.source.alignment_method = "automatic"
-                    self._reset_pipeline()
-            except Exception as exc:
-                self.error = f"Alignment check: {exc}"
+        self._check_alignment()
         if self.depth_source:
             try:
                 frame = self.source.rgbd(self.visual_source, self.depth_source)

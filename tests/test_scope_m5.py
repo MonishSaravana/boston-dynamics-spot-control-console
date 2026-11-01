@@ -390,6 +390,130 @@ class NavigationTests(unittest.TestCase):
         self.assertFalse(any(sent["command"].synchronized_command.mobility_command
                              .HasField("se2_trajectory_request") for sent in client.sent))
 
+    def _walk_fixture(self, feedback_status=lambda polls: 1):
+        from types import SimpleNamespace as Obj
+        from bosdyn.api import basic_command_pb2
+        session = InteractionSession(VirtualExecutor(), clock=lambda: 10.)
+        session.offer([candidate(10.)])
+        session.confirm()
+        destination = session.propose(RobotPose(-2., 0., 0., 10., "odom"), free_map())
+
+        class Client:
+            def __init__(self): self.sent, self.polls = [], 0
+            def robot_command(self, **kw):
+                self.sent.append(kw)
+                return len(self.sent)
+            def robot_command_feedback(self, *args, **kw):
+                self.polls += 1
+                traj = Obj(status=feedback_status(self.polls), STATUS_AT_GOAL=1, STATUS_NEAR_GOAL=5,
+                           body_movement_status=2, BODY_STATUS_SETTLED=2)
+                mobility = Obj(status=basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING,
+                               se2_trajectory_feedback=traj)
+                return Obj(feedback=Obj(synchronized_feedback=Obj(mobility_command_feedback=mobility)))
+        return destination, Client()
+
+    def test_transition_state_is_accepted_while_walking(self):
+        destination, client = self._walk_fixture(lambda polls: 1 if polls > 1 else 0)
+        start, goal = destination.route_xy_m[0], (destination.x_m, destination.y_m)
+        poses = iter([RobotPose(*start, 0., 10., "odom"),
+                      RobotPose(*goal, destination.yaw_rad, 10., "odom",
+                                standing=False, transitioning=True)])
+        executor = SpotTrajectoryExecutor(client, lambda: next(poses), lambda _: True,
+            enabled=True, clock=lambda: 10., wait=lambda _: False)
+        self.assertEqual(executor.execute(destination), "ARRIVED_MEASURED_FEEDBACK")
+
+    def test_brief_pose_gap_while_walking_waits_instead_of_aborting(self):
+        destination, client = self._walk_fixture(lambda polls: 1 if polls > 1 else 0)
+        start, goal = destination.route_xy_m[0], (destination.x_m, destination.y_m)
+        now = [10.]
+        reads = []
+
+        def pose():
+            reads.append(now[0])
+            if len(reads) == 2:
+                raise ValueError("ROBOT STATE STALE")        # one failed read after dispatch
+            if len(reads) == 3:
+                return RobotPose(*start, 0., now[0]-2., "odom")   # one stale read
+            at_goal = len(reads) >= 4
+            return RobotPose(*(goal if at_goal else start), destination.yaw_rad if at_goal else 0.,
+                             now[0], "odom", standing=not at_goal, stepping=at_goal)
+
+        def wait(seconds):
+            now[0] += seconds
+            return False
+        executor = SpotTrajectoryExecutor(client, pose, lambda _: True,
+            enabled=True, clock=lambda: now[0], wait=wait)
+        self.assertEqual(executor.execute(destination), "ARRIVED_MEASURED_FEEDBACK")
+        self.assertEqual(len(reads), 4)
+
+        # The same gap before any dispatch, or one longer than the grace, aborts.
+        executor = SpotTrajectoryExecutor(client, lambda: None, lambda _: True,
+            enabled=True, clock=lambda: now[0], wait=wait)
+        with self.assertRaisesRegex(InteractionError, "ROBOT STATE"):
+            executor.execute(destination)
+        reads.clear()
+
+        def long_gap():
+            reads.append(now[0])
+            if len(reads) == 1:
+                return RobotPose(*start, 0., now[0], "odom")
+            raise ValueError("ROBOT STATE STALE")
+
+        def slow_wait(seconds):
+            now[0] += 1.2
+            return False
+        destination, client = self._walk_fixture(lambda polls: 3)
+        executor = SpotTrajectoryExecutor(client, long_gap, lambda _: True,
+            enabled=True, clock=lambda: now[0], wait=slow_wait)
+        with self.assertRaisesRegex(InteractionError, "ROBOT STATE UNAVAILABLE"):
+            executor.execute(destination)
+
+    def test_arrival_is_recognised_from_odometry_when_feedback_stays_near_goal(self):
+        destination, client = self._walk_fixture(lambda polls: 3)   # never AT_GOAL or NEAR_GOAL
+        start, goal = destination.route_xy_m[0], (destination.x_m, destination.y_m)
+        now = [10.]
+        reads = [0]
+
+        def pose():
+            reads[0] += 1
+            if reads[0] == 1:
+                return RobotPose(*start, 0., now[0], "odom")
+            return RobotPose(*goal, destination.yaw_rad, now[0], "odom",
+                             standing=False, stepping=True)
+
+        def wait(seconds):
+            now[0] += seconds
+            return False
+        executor = SpotTrajectoryExecutor(client, pose, lambda _: True,
+            enabled=True, clock=lambda: now[0], wait=wait)
+        self.assertEqual(executor.execute(destination), "ARRIVED_MEASURED_POSE")
+        self.assertGreaterEqual(now[0]-10., 1.)   # held at the goal for the settle time first
+        self.assertTrue(client.sent[-1]["command"].synchronized_command.mobility_command
+                        .HasField("se2_velocity_request"))
+
+        # NEAR_GOAL with a settled body counts as the SDK confirming arrival.
+        destination, client = self._walk_fixture(lambda polls: 5)
+        executor = SpotTrajectoryExecutor(client,
+            lambda: RobotPose(*goal, destination.yaw_rad, 10., "odom"), lambda _: True,
+            enabled=True, clock=lambda: 10.)
+        self.assertEqual(executor.execute(destination), "ARRIVED_MEASURED_FEEDBACK")
+
+    def test_timeout_grows_with_the_route(self):
+        destination, client = self._walk_fixture(lambda polls: 3)
+        start = destination.route_xy_m[0]
+        now = [10.]
+
+        def wait(seconds):
+            now[0] += 6.
+            return False
+        executor = SpotTrajectoryExecutor(client, lambda: RobotPose(*start, 0., now[0], "odom"),
+            lambda _: True, enabled=True, clock=lambda: now[0], wait=wait)
+        with self.assertRaisesRegex(InteractionError, "NAVIGATION TIMEOUT"):
+            executor.execute(destination)
+        # About 1.6 m of route: more than the old flat 15 s, under 30 s.
+        self.assertGreater(now[0]-10., 15.)
+        self.assertLess(now[0]-10., 30.)
+
 
 class ConsoleIntegrationTests(unittest.TestCase):
     def test_simulated_buttons_share_confirm_then_go(self):

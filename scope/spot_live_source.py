@@ -180,8 +180,16 @@ def shared_distortion(visual: SpotImage, depth: SpotImage):
     return coefficients[0] if coefficients else ()
 
 
+# Freshness limits for a camera + depth pair. A Spot image RPC over Wi-Fi can
+# take a few hundred milliseconds, and the visual and depth images of a
+# registered pair are not always captured on the same camera cycle. At the
+# 0.2 m/s GO speed limit these windows amount to a few centimetres of motion.
+IMAGE_MAX_AGE_S = 1.0
+PAIR_MAX_OFFSET_S = .15
+
+
 def pair_to_frame(visual: SpotImage, depth: SpotImage, *, alignment_verified=False,
-                  max_pair_offset_s=.05):
+                  max_pair_offset_s=PAIR_MAX_OFFSET_S):
     """Only verified registered depth may authorize world geometry."""
     if not alignment_verified:
         raise ValueError("Depth alignment requires physical verification")
@@ -360,13 +368,13 @@ class SpotReadOnlySource:
         visual, depth = self.latest.get(visual_name), self.latest.get(depth_name)
         if visual is None or depth is None:
             raise ValueError("Visual or depth stream unavailable")
-        if (time.monotonic()-visual.receive_host_s > .6 or
-                time.monotonic()-depth.receive_host_s > .6):
+        if (time.monotonic()-visual.receive_host_s > IMAGE_MAX_AGE_S or
+                time.monotonic()-depth.receive_host_s > IMAGE_MAX_AGE_S):
             raise ValueError("Camera observation stale")
         if self.robot is not None:
             stamp = self.robot.time_sync.robot_timestamp_from_local_secs(time.time())
             robot_now = stamp.seconds + stamp.nanos/1e9
-            if any(not 0 <= robot_now-image.acquisition_robot_s <= .6
+            if any(not -.1 <= robot_now-image.acquisition_robot_s <= IMAGE_MAX_AGE_S
                    for image in (visual, depth)):
                 raise ValueError("Camera acquisition stale")
         return pair_to_frame(visual, depth,
@@ -392,7 +400,8 @@ class SpotReadOnlySource:
         return RobotPose(float(T[0, 3]), float(T[1, 3]),
             float(np.arctan2(T[1, 0], T[0, 0])), time.monotonic(),
             self.root_frame, behavior == robot_state_pb2.BehaviorState.STATE_STANDING,
-            behavior == robot_state_pb2.BehaviorState.STATE_STEPPING)
+            behavior == robot_state_pb2.BehaviorState.STATE_STEPPING,
+            behavior == robot_state_pb2.BehaviorState.STATE_TRANSITION)
 
     def mark_processed(self, name, acquisition_robot_s):
         if self._last_processed.get(name) != acquisition_robot_s:

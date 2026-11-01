@@ -546,9 +546,11 @@ function updateWorkspace(ws, control) {
       $("camera-caption").textContent =
         ws.depth_overlay && ws.alignment?.check?.state === "checking"
           ? "Depth overlay · checking alignment automatically (a few seconds)."
-          : ws.depth_overlay
-        ? "Depth overlay: colored points should sit on the objects they belong to (red near, blue far). If they do, confirm alignment in Sources."
-        : `Processing pair: ${ws.visual_source} + ${ws.depth_source || "no depth"}${ws.alignment_verified ? "" : " · alignment unverified"}`;
+          : ws.depth_overlay && ws.alignment?.method === "assumed"
+            ? "Depth overlay · alignment assumed from Spot's registered pair, not confirmed. Colored points should sit on their objects (red near, blue far); tick the box in Sources once they do."
+            : ws.depth_overlay
+              ? "Depth overlay: colored points should sit on the objects they belong to (red near, blue far). If they do, confirm alignment in Sources."
+              : `Processing pair: ${ws.visual_source} + ${ws.depth_source || "no depth"}${ws.alignment_verified ? "" : " · alignment unverified"}`;
       $("camera-empty").textContent =
         "Perception display disabled or waiting for fresh frames";
       if (camera && (!camera.displayed || !camera.acquired)) {
@@ -886,15 +888,18 @@ function buildPolicies(ws) {
   }
   $("visual-source").value = ws.visual_source || "";
   buildDepthOptions(keys, ws.simulated, ws.depth_source);
-  $("alignment-verified").checked = ws.alignment_verified;
+  const assumed = ws.alignment?.method === "assumed";
+  $("alignment-verified").checked = ws.alignment_verified && !assumed;
   const check = ws.alignment?.check;
   $("alignment-label").textContent = ws.simulated
     ? "Fixture alignment (synthetic)"
     : ws.alignment?.method === "automatic"
       ? "Alignment confirmed automatically for this pair"
-      : check?.state === "checking"
-        ? "Checking alignment automatically…"
-        : "Alignment verified for this pair";
+      : assumed
+        ? "Alignment assumed from Spot's registered pair; tick to confirm by eye"
+        : check?.state === "checking"
+          ? "Checking alignment automatically…"
+          : "Alignment verified for this pair";
   $("alignment-note").textContent = ws.simulated
     ? "Fixed RGB-D geometry supplied by the synthetic fixture."
     : check

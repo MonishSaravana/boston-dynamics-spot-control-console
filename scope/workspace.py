@@ -70,7 +70,8 @@ class GuardedDispatch:
 def default_pair(sources, visual=None, depth=None):
     """Front-left camera and its registered depth unless the operator chose others.
 
-    Depth alignment stays unverified until the operator confirms it in Sources.
+    Spot's registered pair is checked automatically and used after a bounded
+    check either way; the operator can confirm it in Sources.
     """
     if not visual:
         visual = ('frontleft_fisheye_image' if 'frontleft_fisheye_image' in sources else
@@ -107,7 +108,7 @@ def paint_depth(picture, b):
     depth = b.source.latest.get(b.depth_source)
     if depth is None or depth.pixels.dtype != np.uint16 or not depth.depth_scale:
         return
-    if time.monotonic()-depth.receive_host_s > .6:
+    if time.monotonic()-depth.receive_host_s > 1.:
         return
     raw = np.rot90(depth.pixels[:, :, 0], upright_quarter_turns(b.visual_source))
     if raw.shape[::-1] != picture.size:
@@ -737,7 +738,9 @@ class Workspace:
         if b.mode != 'SIMULATED':
             payload['timings']['sensors'] = b.source.timings.snapshot()
             payload['map_status'] = map_status(b, self.control.failed and self.mode == 'robot_control')
-            payload['depth_overlay'] = bool(b.depth_source and not b.source.alignment_verified)
+            # The overlay stays while alignment is only assumed so it can be judged by eye.
+            payload['depth_overlay'] = bool(b.depth_source and (
+                not b.source.alignment_verified or b.source.alignment_method == 'assumed'))
         images = {}
         if b.frame is not None:
             displayed = b.mode == 'SIMULATED' or (b.source.policy[b.visual_source].display and

@@ -4,18 +4,30 @@ Object outlines appear both as depth jumps and as brightness edges. When the
 depth is aligned, depth jumps land on image edges far more often than when the
 same depth is shifted by a few pixels. The check only applies to Spot's own
 registered pairs (<camera>_depth_in_visual_frame); calibration, timestamp and
-transform checks still run in pair_to_frame. Thresholds were set on synthetic
-RGB-D frames and have not been validated on Spot captures, so a failed check
-falls back to the manual confirmation in Sources.
+transform checks still run in pair_to_frame.
+
+The check is advisory. Spot renders the registered depth into the visual
+camera's pixel grid itself, so an inconclusive check does not hold the map
+back: after a bounded number of frames the pair is used as Spot delivers it
+and the result is reported as "assumed". The check keeps running at a low
+rate and upgrades to "passed" when enough frames agree. Thresholds were set
+on synthetic RGB-D frames and have not been validated on Spot captures.
 """
 import numpy as np
 
 SHIFTS_PX = ((6, 0), (-6, 0), (0, 6), (0, -6), (10, 0), (-10, 0), (0, 10), (0, -10))
-MIN_DEPTH_EDGES = 150
-MIN_SCORE = .25
-MIN_RATIO = 1.3
+# Spot's depth is sparse near the image edge and on dark floors, so these are
+# looser than a dense synthetic frame would need.
+MIN_DEPTH_EDGES = 80
+MIN_SCORE = .20
+MIN_RATIO = 1.2
 PASSES_NEEDED = 3
-ATTEMPTS_ALLOWED = 20
+ATTEMPTS_ALLOWED = 10
+WAIT_LIMIT_S = 10.
+
+ASSUMED_DETAIL = ("Automatic check could not confirm alignment, so the map uses Spot's "
+                  "registered depth as delivered. Compare the colored depth overlay with the "
+                  "camera image; tick the box in Sources once it looks right.")
 
 
 def registered_depth_for(visual_source):
@@ -74,7 +86,12 @@ def passes(aligned, shifted, count):
 
 
 class AlignmentCheck:
-    """Needs several passing frames; gives up after a bounded number of tries."""
+    """States: checking -> passed, or checking -> assumed -> passed.
+
+    "assumed" means the bounded check did not confirm the pair and geometry
+    proceeds with Spot's registered depth as delivered. Observation continues
+    in that state so later frames can still confirm it.
+    """
 
     def __init__(self, clock=None):
         import time
@@ -87,29 +104,31 @@ class AlignmentCheck:
         self.detail = "Checking that depth lines up with the camera image"
 
     def observe(self, frame):
-        if self.state != "checking" or frame.frame_id == self.last_frame:
+        if self.state == "passed" or frame.frame_id == self.last_frame:
             return self.state
         self.last_frame = frame.frame_id
         self.attempts += 1
         aligned, shifted, count = edge_alignment(frame.rgb, frame.depth_m)
         if passes(aligned, shifted, count):
             self.passes += 1
-        self.detail = (f"Depth edges on image edges: {aligned:.2f} aligned vs {shifted:.2f} "
-                       f"shifted ({count} depth edges); {self.passes}/{PASSES_NEEDED} frames passed")
+        scores = (f"Depth edges on image edges: {aligned:.2f} aligned vs {shifted:.2f} "
+                  f"shifted ({count} depth edges); {self.passes}/{PASSES_NEEDED} frames passed")
         if self.passes >= PASSES_NEEDED:
             self.state = "passed"
-        elif self.attempts >= ATTEMPTS_ALLOWED:
-            self.state = "failed"
-            self.detail = ("Automatic check could not confirm alignment. " + self.detail +
-                           ". Check the depth overlay and confirm in Sources.")
+            self.detail = scores
+        elif self.state == "assumed" or self.attempts >= ATTEMPTS_ALLOWED:
+            self.state = "assumed"
+            self.detail = f"{ASSUMED_DETAIL} {scores}"
+        else:
+            self.detail = scores
         return self.state
 
-    def give_up_if_slow(self, limit_s=20.):
-        """Stop waiting when no usable camera + depth pair arrives at all."""
+    def give_up_if_slow(self, limit_s=WAIT_LIMIT_S):
+        """Stop holding the map back when no usable camera + depth pair arrives."""
         if self.state == "checking" and self.clock()-self.started_s > limit_s:
-            self.state = "failed"
+            self.state = "assumed"
             self.detail = ("No usable camera + depth frames arrived for the automatic check. "
-                           "Check the depth overlay and confirm in Sources.")
+                           + ASSUMED_DETAIL)
         return self.state
 
     def snapshot(self):

@@ -10,6 +10,22 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .live_interaction import InteractionError, TimingBook
 
+# Every trajectory command expires this soon after it is sent, so the robot
+# stops on its own if the console or the network falls silent.
+COMMAND_EXPIRY_S = .75
+# How long a stale or failed pose read is tolerated before GO aborts. The
+# command above has already expired by then, so the robot is standing still.
+POSE_GRACE_S = 1.0
+POSE_MAX_AGE_S = .6
+# Spot's speed limit for GO, and the slowest average progress still waited for.
+SPEED_LIMIT_MPS = .20
+PROGRESS_FLOOR_MPS = .10
+MIN_TIMEOUT_S = 15.
+# Arrival judged from odometry alone when the SDK keeps reporting "near goal".
+ARRIVED_XY_M = .20
+ARRIVED_YAW_RAD = .25
+ARRIVED_SETTLE_S = 1.0
+
 
 class SpotTrajectoryExecutor:
     mode = "SPOT_SUPERVISED"
@@ -27,17 +43,33 @@ class SpotTrajectoryExecutor:
         self.command_ids = []
         self.measured = []
         self.timings = TimingBook()
+        self.last_good_pose_s = None
 
     def _readiness(self, destination, walking=False):
-        pose = self.state_reader()
+        """Return the fresh pose, or None while a brief pose gap is tolerated."""
+        try:
+            pose = self.state_reader()
+        except Exception as exc:
+            pose = None
+            reason = f"ROBOT STATE UNAVAILABLE: {exc}"
+        else:
+            reason = "ROBOT STATE STALE"
+        now = self.clock()
+        if pose is not None and not 0 <= now-pose.observed_host_s <= POSE_MAX_AGE_S:
+            pose = None
+        if pose is None:
+            if (walking and self.last_good_pose_s is not None
+                    and now-self.last_good_pose_s <= POSE_GRACE_S):
+                return None
+            raise InteractionError(reason)
         # The first dispatch needs Spot standing. Once our trajectory is active,
-        # stepping is the expected state rather than a reason to abort.
-        upright = pose is not None and (pose.standing or walking and pose.stepping)
-        if (not upright or pose.world_frame != destination.world_frame
-                or not 0 <= self.clock()-pose.observed_host_s <= .6):
+        # stepping, and the brief transition between the two, are expected states.
+        upright = pose.standing or walking and (pose.stepping or pose.transitioning)
+        if not upright or pose.world_frame != destination.world_frame:
             raise InteractionError("ROBOT STATE STALE or not standing")
         if not self.route_clear(destination):
             raise InteractionError("ROUTE BLOCKED or map stale")
+        self.last_good_pose_s = now
         return pose
 
     def execute(self, destination):
@@ -51,25 +83,36 @@ class SpotTrajectoryExecutor:
                          zip(destination.route_xy_m, destination.route_xy_m[1:]))
         if distance_m > 2.5:
             raise InteractionError("NAVIGATION UNAVAILABLE: first-run route exceeds 2.5 m")
+        # Enough time for the route at half the speed limit plus turning and settling.
+        timeout_s = max(MIN_TIMEOUT_S, 10.+distance_m/PROGRESS_FLOOR_MPS)
         start = self.clock()
         first_xy = None
         response_seen = False
         dispatched = False
+        near_since = None
+        self.last_good_pose_s = None
         from bosdyn.api import basic_command_pb2, geometry_pb2
         from bosdyn.client.robot_command import RobotCommandBuilder
         params = RobotCommandBuilder.mobility_params()
         params.vel_limit.CopyFrom(geometry_pb2.SE2VelocityLimit(
-            max_vel=geometry_pb2.SE2Velocity(linear=geometry_pb2.Vec2(x=.20, y=.20),
-                                               angular=.30),
-            min_vel=geometry_pb2.SE2Velocity(linear=geometry_pb2.Vec2(x=-.20, y=-.20),
-                                               angular=-.30)))
+            max_vel=geometry_pb2.SE2Velocity(
+                linear=geometry_pb2.Vec2(x=SPEED_LIMIT_MPS, y=SPEED_LIMIT_MPS), angular=.30),
+            min_vel=geometry_pb2.SE2Velocity(
+                linear=geometry_pb2.Vec2(x=-SPEED_LIMIT_MPS, y=-SPEED_LIMIT_MPS), angular=-.30)))
         command = RobotCommandBuilder.synchro_se2_trajectory_point_command(
             destination.x_m, destination.y_m, destination.yaw_rad, "odom", params=params)
+        processing = basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING
         try:
-            while self.clock()-start < 15.:
+            while self.clock()-start < timeout_s:
                 if self.cancel.is_set():
                     raise InteractionError("Stop requested")
                 pose = self._readiness(destination, walking=dispatched)
+                if pose is None:
+                    # Pose gap inside the grace window: the last command expires on
+                    # its own, so wait briefly for state instead of aborting.
+                    if self.wait(.10):
+                        raise InteractionError("Stop requested")
+                    continue
                 if min(math.hypot(pose.x_m-x, pose.y_m-y)
                        for x, y in destination.route_xy_m) > .6:
                     raise InteractionError("ROBOT DEVIATED FROM PREVIEW")
@@ -81,12 +124,23 @@ class SpotTrajectoryExecutor:
                 elif not response_seen and math.hypot(pose.x_m-first_xy[0], pose.y_m-first_xy[1]) > .02:
                     self.timings.add("measured_robot_response", (self.clock()-start)*1000)
                     response_seen = True
+                remaining_m = math.hypot(pose.x_m-destination.x_m, pose.y_m-destination.y_m)
+                delta_yaw = math.atan2(math.sin(pose.yaw_rad-destination.yaw_rad),
+                                       math.cos(pose.yaw_rad-destination.yaw_rad))
+                at_goal_measured = remaining_m <= ARRIVED_XY_M and abs(delta_yaw) <= ARRIVED_YAW_RAD
+                if at_goal_measured and dispatched:
+                    near_since = near_since if near_since is not None else self.clock()
+                    if self.clock()-near_since >= ARRIVED_SETTLE_S:
+                        self.timings.add("measured_arrival", (self.clock()-start)*1000)
+                        return "ARRIVED_MEASURED_POSE"
+                else:
+                    near_since = None
                 dispatch_start = time.perf_counter()
                 with self.command_lock:
                     if self.cancel.is_set():
                         raise InteractionError("Stop requested")
                     command_id = self.client.robot_command(
-                        command=command, end_time_secs=time.time()+.75, timeout=.7)
+                        command=command, end_time_secs=time.time()+COMMAND_EXPIRY_S, timeout=.7)
                 self.timings.add("command_rpc_ack", (time.perf_counter()-dispatch_start)*1000)
                 self.command_ids.append(command_id)
                 dispatched = True
@@ -95,17 +149,16 @@ class SpotTrajectoryExecutor:
                 self.timings.add("feedback_rpc", (time.perf_counter()-feedback_start)*1000)
                 mobility = feedback.feedback.synchronized_feedback.mobility_command_feedback
                 trajectory = mobility.se2_trajectory_feedback
-                if (mobility.status == basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING
-                        and trajectory.status == trajectory.STATUS_AT_GOAL
+                near_goal = getattr(trajectory, "STATUS_NEAR_GOAL", None)
+                reached = trajectory.status == trajectory.STATUS_AT_GOAL or (
+                    near_goal is not None and trajectory.status == near_goal)
+                if (mobility.status == processing and reached
                         and trajectory.body_movement_status == trajectory.BODY_STATUS_SETTLED):
-                    delta_yaw = math.atan2(math.sin(pose.yaw_rad-destination.yaw_rad),
-                                           math.cos(pose.yaw_rad-destination.yaw_rad))
-                    if (math.hypot(pose.x_m-destination.x_m, pose.y_m-destination.y_m) > .3 or
-                            abs(delta_yaw) > .5):
+                    if remaining_m > .3 or abs(delta_yaw) > .5:
                         raise InteractionError("ROBOT RESPONSE MISMATCH: feedback/odom disagree")
                     self.timings.add("measured_arrival", (self.clock()-start)*1000)
                     return "ARRIVED_MEASURED_FEEDBACK"
-                if mobility.status != basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING:
+                if mobility.status != processing:
                     raise InteractionError("NAVIGATION FAILED: SDK mobility feedback")
                 if self.wait(.20):
                     raise InteractionError("Stop requested")
@@ -120,7 +173,7 @@ class SpotTrajectoryExecutor:
                 command=RobotCommandBuilder.synchro_velocity_command(0, 0, 0),
                 end_time_secs=time.time()+.35, timeout=.7)
         except Exception:
-            # The previous trajectory expires within .75 s if the network is gone.
+            # The previous trajectory expires within COMMAND_EXPIRY_S if the network is gone.
             pass
 
     def stop(self):

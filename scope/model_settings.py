@@ -36,10 +36,13 @@ OPTIONS = [
      "help": "Minimum Grounding DINO score for a candidate.",
      "choices": [
          {"value": "loose", "label": "Loose · 0.35",
-          "summary": "Picks up distant, dark or partly hidden objects, with more wrong boxes.",
-          "measured": "Not separately measured. A trash can at 0.41 was refused at the default."},
+          "summary": "The default on Spot. Its grayscale fisheye cameras score lower than the "
+                     "color photos the thresholds were tuned on, so this picks up distant, dark "
+                     "or partly hidden objects at the cost of more wrong boxes. The checked "
+                     "finder still needs a second model to agree.",
+          "measured": "Not separately measured. A trash can at 0.41 was refused at 0.45."},
          {"value": "standard", "label": "Standard · 0.45",
-          "summary": "The tuned default.",
+          "summary": "The threshold the held-out photo results above were measured with.",
           "measured": "Tuned on two development rooms; the held-out results above use it."},
          {"value": "strict", "label": "Strict · 0.55",
           "summary": "Fewer wrong boxes, but more real objects are refused.",
@@ -97,7 +100,7 @@ OPTIONS = [
      ]},
 ]
 
-DEFAULTS = {"finder": "checked", "confidence": "standard", "detail": "standard",
+DEFAULTS = {"finder": "checked", "confidence": "loose", "detail": "standard",
             "outline": "grabcut", "refresh": "standard", "device": "auto"}
 
 THRESHOLDS = {"loose": .35, "standard": .45, "strict": .55}

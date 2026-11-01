@@ -46,7 +46,7 @@ The Spot SDK, model bundles, credentials and camera captures are not in this rep
 1. Type `chair` in the search box. Other ways in: **Simulate pointing**, or **World**, select an entity, **Use as target**.
 2. Pick a candidate and press **Confirm target**.
 3. Check the destination, heading, standoff and route evidence in the inspector.
-4. Press **GO**. Each preview works once and expires after 10 s, and evidence older than 1.5 s cannot be confirmed. In Robot control, manual drive, posture and gestures are blocked until the walk ends or you press Stop.
+4. Press **GO**. Each preview works once and expires after 10 s, and evidence older than 1.5 s cannot be confirmed. In Robot control, manual drive, posture and gestures are blocked until the walk ends or you press Stop. On Spot the walk is limited to 2.5 m and 0.2 m/s, each trajectory command expires 0.75 s after it is sent, and the console checks the robot's state before every resend: standing to start, then standing, stepping or the transition between them while walking. A robot-state gap of up to 1 s while walking is waited out (the command has already expired, so Spot is standing still); a longer gap, a blocked route or a stop request ends the walk with zero velocity. Arrival is taken from the SDK's at-goal or near-goal feedback with a settled body, or from odometry alone once Spot has held the goal within 0.2 m and 0.25 rad for 1 s. The walk times out after 15 s or 10 s plus 10 s per metre, whichever is longer.
 
 ### Drive and posture (Robot control only)
 
@@ -69,7 +69,7 @@ Driving unlocks only after fresh robot state confirms Spot is standing. Releasin
 | Setting | Choices |
 | --- | --- |
 | Object finder | Checked (Grounding DINO + OWLv2, the default) or Fast (Grounding DINO only) |
-| Confidence needed | 0.35, 0.45 (default) or 0.55 |
+| Confidence needed | 0.35 (default), 0.45 or 0.55. The default is loose because Spot's grayscale fisheye images score lower than the photos the thresholds were tuned on; the checked finder still needs a second model to agree |
 | Image detail | 512 px (default) or 800/768 px |
 | Object outline | GrabCut (default) or SAM 2.1 Tiny |
 | Re-check the target every | 1.0, 1.5 (default) or 3.0 s |
@@ -121,9 +121,9 @@ Set `SPOT_HOST` or `SPOT_USER` to use a different robot or account. To change th
 
 To do it by hand instead, run the SDK's `estop_nogui.py` in one Terminal and `.venv/bin/python scope_web.py` in another, then use **Connection**.
 
-The console starts on `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame` when the robot lists them. For Spot's registered depth (`<camera>_depth_in_visual_frame`), SCOPE checks alignment automatically: it compares depth jumps with image edges at the true position and at 6 to 10 px shifts, and needs three passing frames. This check was tuned on synthetic frames and has not been validated on Spot captures. If it cannot confirm the pair, the camera shows depth as a colored overlay (red near, blue far). Tick the alignment box in **Sources** only if the colors sit on the right objects. The map and GO stay off until alignment is confirmed.
+The console starts on `frontleft_fisheye_image` with `frontleft_depth_in_visual_frame` when the robot lists them. For Spot's registered depth (`<camera>_depth_in_visual_frame`), SCOPE checks alignment automatically: it compares depth jumps with image edges at the true position and at 6 to 10 px shifts, and needs three passing frames. The check is advisory. Spot renders this depth into the camera's pixel grid itself, so if the check cannot confirm the pair within ten frames, or no usable pair arrives for 10 s, the map and GO go ahead with the pair as Spot delivers it and **Sources** reports the alignment as assumed. The camera keeps showing depth as a colored overlay (red near, blue far) until you tick the alignment box, and the check keeps running at a low rate and upgrades to confirmed when frames agree. The thresholds were tuned on synthetic frames and have not been validated on Spot captures; the overlay is the check that matters on the robot.
 
-Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. The other fisheye cameras are shown at 2 Hz by default. One visual and depth pair feeds perception, and the depth list only offers the depth image registered to the chosen camera. Mapping and destination preview need confirmed alignment plus valid calibration, timestamps and odom transforms. Spot renders the registered depth into the visual camera's pixel grid, so the pair is treated as one projection whichever camera model each source reports: if either reports fisheye (Kannala-Brandt) coefficients, both images are rectified with them; pinhole intrinsics the two sources both report must agree, otherwise the pair is refused. Neither the automatic check nor the checkbox calibrates anything. The front panorama is an approximate stitch.
+Camera settings (**Sources** on the Live camera panel) control acquisition, display and rate for each source, from above 0 up to 30 Hz. The other fisheye cameras are shown at 2 Hz by default. One visual and depth pair feeds perception, and the depth list only offers the depth image registered to the chosen camera. Mapping and destination preview need confirmed or assumed alignment plus valid calibration, timestamps and odom transforms. A pair is used only while both images were received within the last 1.0 s and were captured within 0.15 s of each other; otherwise the camera stays visible and the map pauses until fresh frames arrive. Spot renders the registered depth into the visual camera's pixel grid, so the pair is treated as one projection whichever camera model each source reports: if either reports fisheye (Kannala-Brandt) coefficients, both images are rectified with them; pinhole intrinsics the two sources both report must agree, otherwise the pair is refused. Neither the automatic check nor the checkbox calibrates anything. The front panorama is an approximate stitch.
 
 Returning to Observe or Dry run stops movement but keeps an existing command lease until you press **Disconnect**.
 
@@ -140,7 +140,7 @@ To run the tests:
 .venv/bin/python -m unittest discover
 ```
 
-The suite has 172 tests, and 3 of them skip unless optional datasets are present.
+The suite has 178 tests, and 3 of them skip unless optional datasets are present.
 
 ## Future plans
 

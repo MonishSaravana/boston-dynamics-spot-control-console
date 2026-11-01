@@ -41,15 +41,25 @@ class AlignmentTests(unittest.TestCase):
         check.observe(aligned[1])
         self.assertEqual(check.observe(aligned[2]), "passed")
 
-    def test_check_gives_up_on_misaligned_depth_or_no_frames(self):
+    def test_check_assumes_the_pair_on_misaligned_depth_or_no_frames(self):
         check = AlignmentCheck()
         for frame in frames(shift=8, count=25):
             check.observe(frame)
-        self.assertEqual(check.state, "failed")
+        self.assertEqual(check.state, "assumed")
+        self.assertIn("registered depth as delivered", check.detail)
         now = [0.]
         idle = AlignmentCheck(clock=lambda: now[0])
-        now[0] = 21.
-        self.assertEqual(idle.give_up_if_slow(), "failed")
+        now[0] = 11.
+        self.assertEqual(idle.give_up_if_slow(), "assumed")
+
+    def test_assumed_check_still_passes_on_later_aligned_frames(self):
+        check = AlignmentCheck()
+        for frame in frames(shift=8, count=12):
+            check.observe(frame)
+        self.assertEqual(check.state, "assumed")
+        for frame in frames(count=3):
+            check.observe(frame)
+        self.assertEqual(check.state, "passed")
 
 
 class FakeSource:
@@ -99,6 +109,29 @@ class LiveAlignmentTests(unittest.TestCase):
             self.assertEqual(backend.source.alignment_method, "automatic")
             self.assertIsNotNone(backend.pipeline)
             self.assertTrue(backend.pipeline.runtime.state("mapping").config.enabled)
+        finally:
+            backend.close()
+
+    def test_misaligned_pair_still_starts_the_map_as_assumed_then_upgrades(self):
+        source = FakeSource(shift=8)
+        backend = SpotBackend("", VISUAL, DEPTH, source=source)
+        try:
+            deadline = time.monotonic()+10
+            while time.monotonic() < deadline and backend.pipeline is None:
+                backend.last_alignment_probe_s = 0.   # no waiting between probes in the test
+                backend.tick()
+            self.assertEqual(backend.source.alignment_method, "assumed")
+            self.assertTrue(backend.source.alignment_verified)
+            self.assertIsNotNone(backend.pipeline)
+            self.assertTrue(backend.pipeline.runtime.state("mapping").config.enabled)
+            self.assertEqual(backend.alignment.state, "assumed")
+            pipeline = backend.pipeline
+            source.frames = iter(frames(count=500))
+            for _ in range(6):
+                backend.last_alignment_probe_s = 0.
+                backend.tick()
+            self.assertEqual(backend.source.alignment_method, "automatic")
+            self.assertIs(backend.pipeline, pipeline)   # the map built so far is kept
         finally:
             backend.close()
 
