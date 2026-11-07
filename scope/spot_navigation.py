@@ -7,8 +7,10 @@ import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 from .live_interaction import InteractionError, TimingBook
+from .path_planning import densify
 
 # Every trajectory command expires this soon after it is sent, so the robot
 # stops on its own if the console or the network falls silent.
@@ -132,7 +134,8 @@ class SpotTrajectoryExecutor:
                     self.timings.add("measured_robot_response", (self.clock()-start)*1000)
                     response_seen = True
                 while (leg < len(waypoints)-1 and math.hypot(
-                        pose.x_m-waypoints[leg][0], pose.y_m-waypoints[leg][1]) <= WAYPOINT_PASSED_M):
+                        pose.x_m-waypoints[leg][0], pose.y_m-waypoints[leg][1]) <= WAYPOINT_PASSED_M
+                        and self._shortcut_clear(destination, pose, waypoints[leg+1])):
                     leg += 1
                 command = commands[leg]
                 final_leg = leg == len(waypoints)-1
@@ -177,6 +180,13 @@ class SpotTrajectoryExecutor:
             raise InteractionError("NAVIGATION TIMEOUT")
         finally:
             self._zero()
+
+    def _shortcut_clear(self, destination, pose, corner):
+        """Spot walks straight from where it is, so that line must be clear too."""
+        shortcut = SimpleNamespace(
+            world_frame=destination.world_frame, clearance_m=destination.clearance_m,
+            route_xy_m=densify(((pose.x_m, pose.y_m), corner[:2])))
+        return self.route_clear(shortcut)
 
     def _zero(self):
         from bosdyn.client.robot_command import RobotCommandBuilder

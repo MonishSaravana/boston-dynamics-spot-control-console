@@ -20,6 +20,8 @@ from .runtime import distribution
 LEG_MAX_M = 2.4
 # A viewpoint must be this close to the unmapped place it is meant to see.
 LOOK_RANGE_M = 3.0
+# How far the route re-planned at GO may sit from the previewed one.
+ROUTE_MATCH_M = .15
 
 
 class SelectionSource(StrEnum):
@@ -70,6 +72,15 @@ class RobotPose:
     # and STATE_TRANSITION briefly between the two.
     stepping: bool = False
     transitioning: bool = False
+
+
+def route_matches(a, b, tolerance_m=ROUTE_MATCH_M):
+    """Each route stays within tolerance_m of the other along its whole length."""
+    if not a or not b:
+        return False
+    pa, pb = np.asarray(densify(a), float), np.asarray(densify(b), float)
+    gaps = np.linalg.norm(pa[:, None, :] - pb[None, :, :], axis=2)
+    return gaps.min(axis=1).max() <= tolerance_m and gaps.min(axis=0).max() <= tolerance_m
 
 
 @dataclass(frozen=True)
@@ -418,6 +429,10 @@ class InteractionSession:
                 fresh.purpose != proposal.purpose):
             self.proposal = None
             raise InteractionError("DESTINATION CHANGED: preview again")
+        # The same goal can be reached another way round; only the shown route is approved.
+        if not route_matches(fresh.route_xy_m, proposal.route_xy_m):
+            self.proposal = None
+            raise InteractionError("ROUTE CHANGED: preview again")
         self.proposal = None  # single-use, also when dispatch fails
         self.last_dispatch = fresh
         start = time.perf_counter()

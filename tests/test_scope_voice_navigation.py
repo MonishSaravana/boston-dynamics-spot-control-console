@@ -5,6 +5,7 @@ import time
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace as Obj
+from unittest import mock
 from urllib.request import Request, urlopen
 
 import numpy as np
@@ -14,6 +15,7 @@ from scope.live_interaction import (
     LEG_MAX_M, InteractionError, InteractionSession, RobotPose, VirtualExecutor,
     _clear_disk, direct_candidate, propose_destination)
 from scope.mapping import MapConfig, VoxelMap
+from scope.path_planning import densify
 from scope.spot_navigation import SpotTrajectoryExecutor
 from scope.voice import Transcriber
 
@@ -159,6 +161,24 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(first.reference_xy_m, second.reference_xy_m)
         self.assertGreater(second.goal_xy_m[0], .9)
 
+    def test_go_refuses_a_route_that_differs_from_the_preview(self):
+        mapping = free_map()
+        mark(mapping, (-.9, -.4, 0.), (.9, .4, .9))
+        executor = VirtualExecutor()
+        session = InteractionSession(executor, clock=lambda: self.now)
+        session.set_relation(Relation.BEHIND)
+        session.offer([couch(self.now)])
+        session.confirm()
+        shown = session.propose(self.robot, mapping)
+        # Same goal, reached round the other side of the couch.
+        other = replace(shown, route_xy_m=tuple((x, -y) for x, y in shown.route_xy_m),
+                        waypoints=tuple((x, -y, yaw) for x, y, yaw in shown.waypoints))
+        with mock.patch("scope.live_interaction.propose_destination", return_value=other):
+            with self.assertRaisesRegex(InteractionError, "ROUTE CHANGED"):
+                session.go(self.robot, mapping)
+        self.assertIsNone(session.proposal)
+        self.assertIsNone(executor.pose)
+
 
 class WaypointExecutorTests(unittest.TestCase):
     def test_bent_route_is_commanded_corner_by_corner(self):
@@ -210,6 +230,63 @@ class WaypointExecutorTests(unittest.TestCase):
             self.assertAlmostEqual(y, corner[1], places=5)
 
 
+class CornerShortcutTests(unittest.TestCase):
+    def test_next_corner_waits_until_the_shortcut_is_clear(self):
+        from bosdyn.api import basic_command_pb2
+        mapping = free_map()
+        mark(mapping, (-.9, -.4, 0.), (.9, .4, .9))
+        now = [10.]
+        robot = RobotPose(-2.5, 0., 0., 10., "odom")
+        session = InteractionSession(VirtualExecutor(), clock=lambda: now[0])
+        session.set_relation(Relation.BEHIND)
+        session.offer([couch(10.)])
+        session.confirm()
+        destination = session.propose(robot, mapping)
+        self.assertGreater(len(destination.waypoints), 1)
+        planned = np.asarray(densify(destination.route_xy_m, .02))
+
+        def on_route(route):
+            points = np.asarray(densify(route.route_xy_m, .02))
+            gaps = np.linalg.norm(points[:, None] - planned[None], axis=2).min(axis=1)
+            return bool(gaps.max() <= .06)
+
+        position = [robot.x_m, robot.y_m, 0.]
+        segments = []
+
+        class Client:
+            def robot_command(self, **kw):
+                request = kw["command"].synchronized_command.mobility_command
+                if request.HasField("se2_trajectory_request"):
+                    point = request.se2_trajectory_request.trajectory.points[0].pose
+                    goal = (point.position.x, point.position.y)
+                    start = tuple(position[:2])
+                    segments.append((start, goal))
+                    # Each command first gets Spot 0.25 m short of the corner, then onto it.
+                    gap = math.dist(start, goal)
+                    t = 1. if gap <= .26 else (gap - .25) / gap
+                    position[0] = start[0] + t * (goal[0] - start[0])
+                    position[1] = start[1] + t * (goal[1] - start[1])
+                    position[2] = point.angle
+                return len(segments)
+            def robot_command_feedback(self, *args, **kw):
+                trajectory = Obj(status=0, STATUS_AT_GOAL=1, body_movement_status=0,
+                                 BODY_STATUS_SETTLED=2)
+                mobility = Obj(status=basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING,
+                               se2_trajectory_feedback=trajectory)
+                return Obj(feedback=Obj(synchronized_feedback=Obj(mobility_command_feedback=mobility)))
+
+        def wait(seconds):
+            now[0] += seconds
+            return False
+
+        executor = SpotTrajectoryExecutor(
+            Client(), lambda: RobotPose(position[0], position[1], position[2], now[0], "odom"),
+            on_route, enabled=True, clock=lambda: now[0], wait=wait)
+        self.assertEqual(executor.execute(destination), "ARRIVED_MEASURED_POSE")
+        for start, goal in segments:
+            self.assertTrue(on_route(Obj(route_xy_m=densify((start, goal)))), (start, goal))
+
+
 class DemoCommandTests(unittest.TestCase):
     def setUp(self):
         from scope_web import WebControl
@@ -246,6 +323,15 @@ class DemoCommandTests(unittest.TestCase):
         self.assertGreater(len(purposes), 1)
         robot = self.workspace.backend.robot
         self.assertGreater(robot.y_m, 1.45)  # past the back of the couch
+
+    def test_picking_a_target_directly_drops_the_earlier_side(self):
+        self.action('query', phrase='go behind the couch')
+        self.assertEqual(self.workspace.snapshot()['relation'], 'behind')
+        self.action('select', entity_id='table')
+        state = self.workspace.snapshot()
+        self.assertEqual(state['selected']['entity_id'], 'table')
+        self.assertEqual(state['relation'], 'front')
+        self.assertIsNone(state['command'])
 
     def test_control_words_are_not_searches(self):
         with self.assertRaisesRegex(ValueError, 'go command'):

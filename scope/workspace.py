@@ -512,6 +512,9 @@ class Workspace:
             if any(c.entity_id == entity_id for c in session.candidates):
                 session.select(entity_id)
             else:
+                # A target picked directly carries no side from an earlier command.
+                session.set_relation(Relation.FRONT)
+                self.command = None
                 session.offer([b.direct(entity_id)])
         elif name == 'confirm':
             session.confirm()
