@@ -43,10 +43,28 @@ The Spot SDK, model bundles, credentials and camera captures are not in this rep
 
 ### Pick a target and preview a destination
 
-1. Type `chair` in the search box. Other ways in: **Simulate pointing**, or **World**, select an entity, **Use as target**.
+1. Type `chair` (or a command such as `go behind the couch`, see below) in the search box. Other ways in: **Simulate pointing**, or **World**, select an entity, **Use as target**.
 2. Pick a candidate and press **Confirm target**.
 3. Check the destination, heading, standoff and route evidence in the inspector.
 4. Press **GO**. Each preview works once and expires after 10 s, and evidence older than 1.5 s cannot be confirmed. In Robot control, manual drive, posture and gestures are blocked until the walk ends or you press Stop. On Spot the walk is limited to 2.5 m and 0.2 m/s, each trajectory command expires 0.75 s after it is sent, and the console checks the robot's state before every resend: standing to start, then standing, stepping or the transition between them while walking. A robot-state gap of up to 1 s while walking is waited out (the command has already expired, so Spot is standing still); a longer gap, a blocked route or a stop request ends the walk with zero velocity. Arrival is taken from the SDK's at-goal or near-goal feedback with a settled body, or from odometry alone once Spot has held the goal within 0.2 m and 0.25 rad for 1 s. The walk times out after 15 s or 10 s plus 10 s per metre, whichever is longer.
+
+### Commands, routes and voice
+
+The search box also takes short commands: `go behind the couch`, `go to the left of the table`, `go next to the chair`, `go in front of the sofa`, or `go behind that` (uses pointing for the object). Fixed rules, not a language model, turn a command into an object phrase and a side. The object phrase goes to the same detector search as before. Left and right are as seen from where the robot stood at the first preview, facing the object, and that reference is kept across legs so "behind" does not turn as Spot walks around. A bare phrase like `chair` keeps the old behaviour: stop 1.2 m in front of it.
+
+Destinations are planned over the map with a route around obstacles. A route may only use cells observed free with Spot's footprint (0.42 m radius plus 0.15 m clearance) applied. Unknown cells count as blocked. The standoff drops to 0.9 m or 0.6 m when 1.2 m does not fit, for example near a wall. Each preview says what its GO does:
+
+- **Final leg**: ends at the requested place, facing the object.
+- **First part of a longer route**: one GO covers at most 2.4 m of route. It ends facing the object.
+- **Look first**: the requested place is not mapped yet, which is normal behind an object seen from the front. This GO goes to a mapped viewpoint within 3 m of that place, with no observed obstacle or the object itself in the line of sight. It ends facing the unmapped place.
+
+After a leg or a look arrives, the console waits for the map to update and previews the next leg for up to 12 s. It never sends it on its own: every leg needs its own GO, with the same freshness, standing and route checks as before. On Spot each bend of the route is commanded as its own trajectory point, because Spot walks each point in a straight line.
+
+**Voice.** Hold **Hold to talk** next to the search box and speak. Audio is transcribed on the laptop with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`base.en`, int8 on CPU), so it works on Spot's Wi-Fi once the model is downloaded. Install it with `.venv/bin/python -m pip install "faster-whisper>=1.1,<2"`, then speak one command on a normal network to download the model (about 150 MB). The transcript is shown in the search box and runs the same path as typing. `yes`/`confirm`, `no`/`next`, `go` and `stop` press Confirm target, Reject, GO and STOP MOVEMENT, but only when that button is enabled. A spoken `stop` arrives about a second after you release the button; it is not a safety stop, and the class E-stop is still the one to rely on.
+
+In the offline demo the room is 8 m square with a couch, a table, two chairs and a backpack. Only what the virtual robot has "seen" from its position is mapped: free cells along a 360° line of sight up to 6 m, so the space behind furniture stays unknown until the robot walks somewhere it can see it.
+
+What has been checked: the parser, planner, leg splitting, look-first selection, corner-by-corner trajectory commands and the voice endpoint have unit tests with fake robots and a fake speech model. `go behind the couch` walks to the final leg in the demo, and faster-whisper transcribed synthesized speech of the example commands correctly on this laptop. None of it has run on Spot or with a real microphone in a robot room. Route planning depends on the live map being right, so check the map in **World** before each GO.
 
 ### Drive and posture (Robot control only)
 
@@ -140,7 +158,7 @@ To run the tests:
 .venv/bin/python -m unittest discover
 ```
 
-The suite has 178 tests, and 3 of them skip unless optional datasets are present.
+The suite has 190 tests, and 3 of them skip unless optional datasets are present.
 
 ## Future plans
 
@@ -148,7 +166,6 @@ Ideas only, none of this is in the app.
 
 | Area | Direction |
 | --- | --- |
-| Voice input | Connect a microphone for spoken commands. |
 | Wearable interfaces | Explore control or viewing through VR headsets or Meta Ray-Ban smart glasses. |
 | Emotion-aware interaction | Investigate visual cues for human emotion recognition. |
 | Recognition and personalities | Explore opt-in facial recognition and distinct interaction personalities for known people. |

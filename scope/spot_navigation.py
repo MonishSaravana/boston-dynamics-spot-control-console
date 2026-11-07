@@ -25,6 +25,8 @@ MIN_TIMEOUT_S = 15.
 ARRIVED_XY_M = .20
 ARRIVED_YAW_RAD = .25
 ARRIVED_SETTLE_S = 1.0
+# A route corner counts as passed this close; the next corner is commanded then.
+WAYPOINT_PASSED_M = .30
 
 
 class SpotTrajectoryExecutor:
@@ -99,8 +101,13 @@ class SpotTrajectoryExecutor:
                 linear=geometry_pb2.Vec2(x=SPEED_LIMIT_MPS, y=SPEED_LIMIT_MPS), angular=.30),
             min_vel=geometry_pb2.SE2Velocity(
                 linear=geometry_pb2.Vec2(x=-SPEED_LIMIT_MPS, y=-SPEED_LIMIT_MPS), angular=-.30)))
-        command = RobotCommandBuilder.synchro_se2_trajectory_point_command(
-            destination.x_m, destination.y_m, destination.yaw_rad, "odom", params=params)
+        # Spot walks each commanded point in a straight line, so a route that
+        # bends is sent corner by corner; only the last corner carries arrival.
+        waypoints = tuple(getattr(destination, "waypoints", ()) or
+                          ((destination.x_m, destination.y_m, destination.yaw_rad),))
+        commands = [RobotCommandBuilder.synchro_se2_trajectory_point_command(
+            x, y, yaw, "odom", params=params) for x, y, yaw in waypoints]
+        leg = 0
         processing = basic_command_pb2.RobotCommandFeedbackStatus.STATUS_PROCESSING
         try:
             while self.clock()-start < timeout_s:
@@ -124,6 +131,11 @@ class SpotTrajectoryExecutor:
                 elif not response_seen and math.hypot(pose.x_m-first_xy[0], pose.y_m-first_xy[1]) > .02:
                     self.timings.add("measured_robot_response", (self.clock()-start)*1000)
                     response_seen = True
+                while (leg < len(waypoints)-1 and math.hypot(
+                        pose.x_m-waypoints[leg][0], pose.y_m-waypoints[leg][1]) <= WAYPOINT_PASSED_M):
+                    leg += 1
+                command = commands[leg]
+                final_leg = leg == len(waypoints)-1
                 remaining_m = math.hypot(pose.x_m-destination.x_m, pose.y_m-destination.y_m)
                 delta_yaw = math.atan2(math.sin(pose.yaw_rad-destination.yaw_rad),
                                        math.cos(pose.yaw_rad-destination.yaw_rad))
@@ -152,7 +164,7 @@ class SpotTrajectoryExecutor:
                 near_goal = getattr(trajectory, "STATUS_NEAR_GOAL", None)
                 reached = trajectory.status == trajectory.STATUS_AT_GOAL or (
                     near_goal is not None and trajectory.status == near_goal)
-                if (mobility.status == processing and reached
+                if (final_leg and mobility.status == processing and reached
                         and trajectory.body_movement_status == trajectory.BODY_STATUS_SETTLED):
                     if remaining_m > .3 or abs(delta_yaw) > .5:
                         raise InteractionError("ROBOT RESPONSE MISMATCH: feedback/odom disagree")

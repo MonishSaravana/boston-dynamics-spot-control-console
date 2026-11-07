@@ -26,7 +26,8 @@ class MapConfig:
         return cls((-2.8, -2.8, -0.2), (56, 56, 30))
 
     @classmethod
-    def around_frames(cls, frames: list[RgbdFrame], voxel_m: float = 0.10) -> "MapConfig":
+    def around_frames(cls, frames: list[RgbdFrame], voxel_m: float = 0.10,
+                      pad_xy_m: float = .4) -> "MapConfig":
         positions = []
         for frame in frames:
             points, _, _ = project_depth(frame, stride=16, max_depth_m=5.)
@@ -34,8 +35,9 @@ class MapConfig:
                 positions.append(camera_to_world(points, frame.T_world_camera))
             positions.append(frame.T_world_camera[:3, 3][None, :])
         xyz = np.concatenate(positions)
-        low = np.floor((xyz.min(axis=0) - .4) / voxel_m) * voxel_m
-        high = np.ceil((xyz.max(axis=0) + .4) / voxel_m) * voxel_m
+        margin = np.array([pad_xy_m, pad_xy_m, .4])
+        low = np.floor((xyz.min(axis=0) - margin) / voxel_m) * voxel_m
+        high = np.ceil((xyz.max(axis=0) + margin) / voxel_m) * voxel_m
         shape = tuple(int(v) for v in np.ceil((high - low) / voxel_m))
         if np.prod(shape) > 2_000_000:
             raise ValueError("Map exceeds 2 million voxels; increase voxel size or limit frames")

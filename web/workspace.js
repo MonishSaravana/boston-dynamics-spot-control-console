@@ -22,6 +22,23 @@ const modeCopy = {
     "Command authority required. Confirm a target, inspect the destination, then GO.",
 };
 
+const RELATION_TEXT = {
+  front: "In front of the target",
+  behind: "Behind the target",
+  left: "Left of the target",
+  right: "Right of the target",
+  near: "Next to the target",
+};
+const RELATION_SHORT = {
+  front: "in front", behind: "behind it", left: "to its left",
+  right: "to its right", near: "next to it",
+};
+const LEG_TEXT = {
+  ARRIVE: "Final leg",
+  LEG: "First part of a longer route",
+  LOOK: "Look first: the requested place is not mapped yet",
+};
+
 async function workspaceAction(name, extra = {}) {
   try {
     await api("/api/workspace/action", {
@@ -269,6 +286,10 @@ function drawMap(svg, ws, large = false) {
       }),
     );
     const [x, y] = point(p.x_m, p.y_m);
+    if (p.goal_xy_m && p.purpose !== "ARRIVE") {
+      const [gx, gy] = point(...p.goal_xy_m);
+      annotations.append(el("circle", { cx: gx, cy: gy, r: 8, class: "map-goal" }));
+    }
     annotations.append(
       el("circle", {
         cx: x,
@@ -581,11 +602,17 @@ function updateWorkspace(ws, control) {
     ? "Movement authorization cleared. Preview again before GO."
     : "Confirm a target to propose a destination.";
   $("target-label").textContent = c ? c.entity_id : "Find an object";
+  const goal = ws.command && ws.relation !== "front" ? ` · go ${RELATION_SHORT[ws.relation]}` : "";
   $("target-explanation").textContent = c
     ? control.demo
       ? `${c.label} · world geometry available`
       : `${c.label} · ${c.track_state} · ${c.source.toLowerCase()} selection`
-    : "Search above, use pointing, or select in World.";
+    : "Search or say a command, use pointing, or select in World.";
+  if (c) $("target-explanation").textContent += goal;
+  $("voice-button").disabled = !ws.available || !ws.voice_available;
+  $("voice-button").title = ws.voice_available
+    ? "Hold and speak a command, for example: go behind the couch"
+    : "Voice needs the optional faster-whisper package";
   details(
     $("target-details"),
     c
@@ -636,12 +663,13 @@ function updateWorkspace(ws, control) {
     }
   }
   const p = ws.destination;
+  const purpose = p ? LEG_TEXT[p.purpose] || p.purpose : "";
   $("route-scale").textContent = ws.mapping
     ? `${ws.world_frame} · ${(ws.mapping.config.voxel_m * 100).toFixed(0)} cm cells`
     : "Scale unavailable until a verified map is present";
   $("destination-empty").hidden = !!p;
   $("route-readout").textContent = p
-    ? `Destination ${fixed(p.x_m)}, ${fixed(p.y_m)} m. Heading ${fixed((p.yaw_rad * 180) / Math.PI, 0)}° faces the target. Standoff ${fixed(p.stand_off_m)} m. ${p.route_xy_m.length} observed-free samples.`
+    ? `${RELATION_TEXT[p.relation] || ""} · ${purpose}. ${p.note ? p.note + ". " : ""}Destination ${fixed(p.x_m)}, ${fixed(p.y_m)} m. Heading ${fixed((p.yaw_rad * 180) / Math.PI, 0)}° ${p.purpose === "LOOK" ? "faces the place to map" : "faces the target"}. ${p.route_xy_m.length} observed-free samples.`
     : ws.confirmed
       ? "Movement authorization cleared. Preview again to review a route."
       : "World-frame poses. Camera view does not limit travel direction.";
@@ -649,16 +677,18 @@ function updateWorkspace(ws, control) {
     $("destination-details"),
     p
       ? [
+          ["Approach", RELATION_TEXT[p.relation] || p.relation],
+          ["This GO", purpose],
           ["Destination", `${fixed(p.x_m)}, ${fixed(p.y_m)} m`],
           [
             "Heading",
-            `${fixed((p.yaw_rad * 180) / Math.PI, 0)}° · faces target`,
+            `${fixed((p.yaw_rad * 180) / Math.PI, 0)}° · ${p.purpose === "LOOK" ? "faces place to map" : "faces target"}`,
           ],
           [
             "Standoff / clearance",
             `${fixed(p.stand_off_m)} / ${fixed(p.clearance_m)} m`,
           ],
-          ["Route evidence", `${p.route_xy_m.length} observed-free samples`],
+          ["Route evidence", `${p.route_xy_m.length} observed-free samples · ${p.waypoints?.length || 1} straight segment(s)`],
         ]
       : [],
   );
@@ -992,6 +1022,98 @@ $("query-form").addEventListener("submit", (e) => {
   workspaceAction("query", { phrase: $("target-query").value });
 });
 $("point-button").addEventListener("click", () => workspaceAction("point"));
+
+// Push-to-talk. Audio is transcribed on this laptop; the text then runs the
+// same search, confirm, preview and GO steps as typing and the buttons.
+let voiceRecorder = null,
+  voiceStream = null,
+  voiceChunks = [],
+  voiceHeld = false;
+async function startVoice() {
+  voiceHeld = true;
+  if (voiceRecorder || $("voice-button").disabled) return;
+  try {
+    voiceStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (error) {
+    toast(`Microphone unavailable: ${error.message}`);
+    return;
+  }
+  voiceChunks = [];
+  voiceRecorder = new MediaRecorder(voiceStream);
+  voiceRecorder.ondataavailable = (e) => e.data.size && voiceChunks.push(e.data);
+  voiceRecorder.start();
+  $("voice-button").dataset.recording = "true";
+  $("voice-label").textContent = "Listening…";
+  if (!voiceHeld) stopVoice();
+}
+async function stopVoice() {
+  voiceHeld = false;
+  const recorder = voiceRecorder;
+  if (!recorder) return;
+  voiceRecorder = null;
+  const stopped = new Promise((resolve) => (recorder.onstop = resolve));
+  recorder.stop();
+  await stopped;
+  voiceStream.getTracks().forEach((track) => track.stop());
+  $("voice-button").dataset.recording = "false";
+  $("voice-label").textContent = "Transcribing…";
+  try {
+    const pcm = await toPcm16(new Blob(voiceChunks, { type: recorder.mimeType }));
+    const response = await fetch("/api/voice", {
+      method: "POST",
+      headers: { "X-SCOPE-Token": token, "Content-Type": "application/octet-stream" },
+      body: pcm,
+      cache: "no-store",
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+    await runSpoken(result);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    $("voice-label").textContent = "Hold to talk";
+  }
+}
+async function toPcm16(blob) {
+  const context = new AudioContext();
+  const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+  context.close();
+  const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * 16000)), 16000);
+  const source = offline.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offline.destination);
+  source.start();
+  const samples = (await offline.startRendering()).getChannelData(0);
+  const pcm = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++)
+    pcm[i] = Math.max(-1, Math.min(1, samples[i])) * 32767;
+  return pcm.buffer;
+}
+async function runSpoken({ text, command: spoken }) {
+  $("target-query").value = text;
+  if (!spoken) return toast(`Heard "${text}"; not a command`);
+  if (spoken.action === "stop") {
+    $("stop-button").click();
+    return toast(`Heard "${text}" · Stop requested. The class E-stop is separate.`);
+  }
+  const button = { confirm: "confirm-target", reject: "reject-target", go: "go-button" }[spoken.action];
+  if (button) {
+    if ($(button).disabled) return toast(`Heard "${text}" · ${spoken.action} is not available now`);
+    toast(`Heard "${text}"`);
+    return $(button).click();
+  }
+  toast(`Heard "${text}"`);
+  await workspaceAction("query", { phrase: text, source: "voice" });
+}
+$("voice-button").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  $("voice-button").setPointerCapture?.(e.pointerId);
+  startVoice();
+});
+for (const name of ["pointerup", "pointercancel", "lostpointercapture"])
+  $("voice-button").addEventListener(name, stopVoice);
 for (const [id, name] of [
   ["confirm-target", "confirm"],
   ["reject-target", "reject"],

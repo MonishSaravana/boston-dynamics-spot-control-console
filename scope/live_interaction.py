@@ -11,8 +11,15 @@ import time
 
 import numpy as np
 
+from .commands import Relation
 from .mapping import FREE
+from .path_planning import RoutePlanner, densify, polyline_length, truncate
 from .runtime import distribution
+
+# One GO covers at most this much route; longer plans are walked leg by leg.
+LEG_MAX_M = 2.4
+# A viewpoint must be this close to the unmapped place it is meant to see.
+LOOK_RANGE_M = 3.0
 
 
 class SelectionSource(StrEnum):
@@ -77,6 +84,14 @@ class DestinationProposal:
     route_xy_m: tuple[tuple[float, float], ...]
     map_revision: int
     proposed_host_s: float
+    relation: str = Relation.FRONT.value
+    # ARRIVE ends at the requested place; LEG is part of a longer route; LOOK
+    # goes to a viewpoint because the requested place has not been seen free.
+    purpose: str = "ARRIVE"
+    goal_xy_m: tuple[float, float] | None = None
+    reference_xy_m: tuple[float, float] | None = None
+    waypoints: tuple[tuple[float, float, float], ...] = ()
+    note: str = ""
 
 
 class VirtualExecutor:
@@ -149,9 +164,39 @@ def _clear_disk(mapping, x, y, radius):
     return True
 
 
+def _rotate(v, angle):
+    c, s = math.cos(angle), math.sin(angle)
+    return np.array([c*v[0]-s*v[1], s*v[0]+c*v[1]])
+
+
+def relation_directions(relation, toward_reference):
+    """Unit directions from the object toward the requested side.
+
+    Left and right are as seen from the reference position, facing the object.
+    """
+    facing = -toward_reference
+    sides = {Relation.FRONT: [toward_reference], Relation.BEHIND: [facing],
+             Relation.LEFT: [_rotate(facing, math.pi/2)],
+             Relation.RIGHT: [_rotate(facing, -math.pi/2)]}
+    sides[Relation.NEAR] = [toward_reference, sides[Relation.LEFT][0],
+                            sides[Relation.RIGHT][0], facing]
+    return sides[Relation(relation)]
+
+
+def _waypoints(points, final_yaw):
+    result = []
+    for a, b in zip(points, points[1:]):
+        result.append((float(b[0]), float(b[1]), math.atan2(b[1]-a[1], b[0]-a[0])))
+    if result:
+        result[-1] = (result[-1][0], result[-1][1], float(final_yaw))
+    return tuple(result)
+
+
 def propose_destination(target, robot, mapping, now_s, stand_off_m=1.2,
-                        footprint_m=.42, clearance_m=.15):
+                        footprint_m=.42, clearance_m=.15, relation=Relation.FRONT,
+                        reference_xy=None):
     c = target.candidate
+    relation = Relation(relation)
     if c.bounds_low_m is None or c.bounds_high_m is None:
         raise InteractionError("DEPTH UNAVAILABLE: no target 3D bounds")
     low, high = np.asarray(c.bounds_low_m), np.asarray(c.bounds_high_m)
@@ -167,25 +212,84 @@ def propose_destination(target, robot, mapping, now_s, stand_off_m=1.2,
     if (not robot.standing or not 0 <= now_s - robot.observed_host_s <= .6):
         raise InteractionError("ROBOT STATE STALE or not standing")
     center = (low + high) / 2
-    toward_robot = np.array([robot.x_m, robot.y_m]) - center[:2]
-    if np.linalg.norm(toward_robot) < .05:
+    robot_xy = np.array([robot.x_m, robot.y_m])
+    reference = robot_xy if reference_xy is None else np.asarray(reference_xy, float)
+    toward = reference - center[:2]
+    if np.linalg.norm(toward) < .05:
         raise InteractionError("ROBOT POSITION UNRESOLVED")
-    toward_robot /= np.linalg.norm(toward_robot)
-    for angle in (0., math.pi/6, -math.pi/6, math.pi/3, -math.pi/3):
-        direction = np.array([math.cos(angle)*toward_robot[0]-math.sin(angle)*toward_robot[1],
-                              math.sin(angle)*toward_robot[0]+math.cos(angle)*toward_robot[1]])
-        face = center[:2] + direction * np.linalg.norm((high-low)[:2]) / 2
-        goal = face + direction * stand_off_m
-        distance = np.linalg.norm(goal - np.array([robot.x_m, robot.y_m]))
-        route = tuple(tuple(float(v) for v in point) for point in
-                      np.linspace([robot.x_m, robot.y_m], goal,
-                                  max(2, int(math.ceil(distance/.1))+1)))
-        if all(_clear_disk(mapping, x, y, footprint_m+clearance_m)
-               for x, y in route):
-            yaw = math.atan2(center[1]-goal[1], center[0]-goal[0])
-            return DestinationProposal(target, float(goal[0]), float(goal[1]),
-                yaw, c.world_frame, stand_off_m, clearance_m, route,
-                mapping.revision, now_s)
+    toward /= np.linalg.norm(toward)
+    half_size = (high-low)[:2] / 2
+    planner = RoutePlanner(mapping, footprint_m+clearance_m)
+    if not planner.from_start(robot_xy):
+        raise InteractionError("DESTINATION BLOCKED or unknown: robot footprint not observed free")
+
+    def place(direction, distance):
+        # Distance from the box centre to its face along direction, then the standoff.
+        face = abs(direction[0])*half_size[0] + abs(direction[1])*half_size[1]
+        return center[:2] + direction * (face + distance)
+
+    def facing_center(xy):
+        return math.atan2(center[1]-xy[1], center[0]-xy[0])
+
+    def proposal(path, goal, yaw, purpose, note=""):
+        if polyline_length(path) > LEG_MAX_M:
+            path = truncate(path, LEG_MAX_M)
+            end = path[-1]
+            yaw, purpose = facing_center(end), "LEG"
+            note = note or f"Route is longer than {LEG_MAX_M:.1f} m; this GO covers the first leg"
+        end = path[-1]
+        return DestinationProposal(target, float(end[0]), float(end[1]), float(yaw),
+            c.world_frame, stand_off_m, clearance_m, densify(path), mapping.revision, now_s,
+            relation.value, purpose, (float(goal[0]), float(goal[1])),
+            (float(reference[0]), float(reference[1])), _waypoints(path, yaw), note)
+
+    sweep = (0., math.pi/6, -math.pi/6, math.pi/3, -math.pi/3)
+    directions = relation_directions(relation, toward)
+    options = []
+    # Shorter standoffs only when the full one does not fit, e.g. near a wall.
+    distances = tuple(d for d in (stand_off_m, .9, .6) if d <= stand_off_m)
+    for direction in directions:
+        for distance in distances:
+            for angle in sweep:
+                goal = place(_rotate(direction, angle), distance)
+                path = planner.path_to(goal)
+                if path is not None:
+                    options.append((polyline_length(path), path, goal))
+                    break
+            if len(options) and options[-1][2] is goal:
+                break
+        if options and relation != Relation.NEAR:
+            break
+    if options:
+        _, path, goal = min(options, key=lambda row: row[0])
+        return proposal(path, goal, facing_center(goal), "ARRIVE")
+
+    # The requested side has not been seen free. Walk to a mapped viewpoint
+    # with a clear line of sight to it, then map again and re-plan.
+    wanted = next((place(directions[0], d) for d in distances
+                   if planner.could_be_free(place(directions[0], d))), None)
+    if wanted is None:
+        raise InteractionError("DESTINATION BLOCKED or unknown")
+    box = (low[:2]-.05, high[:2]+.05)
+    views = []
+    centres, costs = planner.reachable()
+    for view, cost in zip(centres, costs):
+        sight = np.linalg.norm(view-wanted)
+        if (np.linalg.norm(view-robot_xy) < .5 or sight > LOOK_RANGE_M or
+                sight > np.linalg.norm(robot_xy-wanted)-.3):
+            continue
+        # Closest look at the place first; the walk there matters less.
+        views.append((sight + .3*cost, view))
+    views.sort(key=lambda row: row[0])
+    views = [(score, view, planner.path_to(view)) for score, view in views[:400]
+             if planner.line_of_sight(view, wanted, box)]
+    views = [row for row in views if row[2] is not None]
+    if views:
+        _, view, path = views[0]
+        yaw = math.atan2(wanted[1]-view[1], wanted[0]-view[0])
+        return proposal(path, wanted, yaw, "LOOK",
+                        f"{relation.value.capitalize()} the target is not mapped yet; "
+                        "this GO goes to a viewpoint first")
     raise InteractionError("DESTINATION BLOCKED or unknown")
 
 
@@ -199,6 +303,15 @@ class InteractionSession:
         self.revision = 0
         self.message = "Select a target"
         self.timings = TimingBook()
+        self.relation = Relation.FRONT
+        # Where "behind" or "left of" was judged from, kept across legs so the
+        # requested side does not turn as the robot walks around the target.
+        self.reference = None
+        self.last_dispatch = None
+
+    def set_relation(self, relation):
+        self.relation = Relation(relation)
+        self.reference = None
 
     def offer(self, candidates, *, ambiguous=False):
         self.candidates = sorted(candidates, key=lambda c: -c.score)
@@ -276,7 +389,12 @@ class InteractionSession:
         if not 0 <= now-self.confirmed.candidate.observed_host_s <= 1.5:
             self.confirmed = self.proposal = None
             raise InteractionError("TARGET STALE")
-        self.proposal = propose_destination(self.confirmed, robot, mapping, now)
+        entity_id = self.confirmed.candidate.entity_id
+        if self.reference is None or self.reference[0] != entity_id:
+            self.reference = (entity_id, (robot.x_m, robot.y_m))
+        self.proposal = propose_destination(self.confirmed, robot, mapping, now,
+                                            relation=self.relation,
+                                            reference_xy=self.reference[1])
         self.timings.add("destination_generation", (time.perf_counter()-start)*1000)
         self.message = "Destination previewed; GO is separate"
         return self.proposal
@@ -293,11 +411,15 @@ class InteractionSession:
         if health_check is not None:
             health_check(self.confirmed.candidate)
         fresh = propose_destination(self.confirmed, robot, mapping, now,
-                                    proposal.stand_off_m, clearance_m=proposal.clearance_m)
-        if math.hypot(fresh.x_m-proposal.x_m, fresh.y_m-proposal.y_m) > .05:
+                                    proposal.stand_off_m, clearance_m=proposal.clearance_m,
+                                    relation=proposal.relation,
+                                    reference_xy=proposal.reference_xy_m)
+        if (math.hypot(fresh.x_m-proposal.x_m, fresh.y_m-proposal.y_m) > .05 or
+                fresh.purpose != proposal.purpose):
             self.proposal = None
             raise InteractionError("DESTINATION CHANGED: preview again")
         self.proposal = None  # single-use, also when dispatch fails
+        self.last_dispatch = fresh
         start = time.perf_counter()
         result = self.executor.execute(fresh)
         self.timings.add("command_dispatch", (time.perf_counter()-start)*1000)

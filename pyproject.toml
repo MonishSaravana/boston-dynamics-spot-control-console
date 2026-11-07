@@ -15,6 +15,7 @@ pose = ["torch==2.14.1", "torchvision==0.29.1"]
 hands = ["mediapipe>=0.10.35,<0.11"]
 perception = ["torch==2.14.1", "torchvision==0.29.1", "transformers>=4.57,<5", "safetensors>=0.6", "opencv-contrib-python>=4.12", "psutil>=7", "h5py>=3.15"]
 perception-gui = ["PySide6>=6.8,<7"]
+voice = ["faster-whisper>=1.1,<2"]
 
 [project.scripts]
 scope = "scope.cli:main"
