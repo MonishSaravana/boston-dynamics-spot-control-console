@@ -89,7 +89,7 @@
                 ><input
                   id="target-query"
                   type="text"
-                  placeholder="Find or target an object…"
+                  placeholder="Find an object, or: go behind the couch"
                   maxlength="160"
                   autocomplete="off"
                 /><button
@@ -98,6 +98,18 @@
                   aria-label="Find target"
                 >
                   Find
+                </button
+                ><button
+                  id="voice-button"
+                  class="voice-button"
+                  type="button"
+                  aria-label="Hold to talk"
+                  title="Hold and speak a command, for example: go behind the couch"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="3" width="6" height="11" rx="3" />
+                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg
+                  ><span id="voice-label">Hold to talk</span>
                 </button>
               </form>
               <button

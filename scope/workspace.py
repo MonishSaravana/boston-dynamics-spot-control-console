@@ -21,8 +21,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from .console_backend import DemoBackend, SpotBackend, camera_box, draw_perception_overlay
-from .live_interaction import DryRunExecutor, InteractionSession, RobotPose, VirtualExecutor
-from . import model_settings, robot_login
+from .commands import Action, Relation, parse_command
+from .live_interaction import (DryRunExecutor, InteractionError, InteractionSession, RobotPose,
+                               VirtualExecutor)
+from . import model_settings, robot_login, voice
 from .session_recording import SessionRecorder, copy_map
 from .runtime import ModuleConfig
 
@@ -235,9 +237,14 @@ class Workspace:
         self.cached = {}
         self.message = 'Starting synthetic room' if demo else 'Connect sensors or start the offline demo'
         self.query_key = None
+        self.command = None
+        self.last_execution = None
+        # After a LEG or LOOK arrival, the next leg is previewed (never sent) until this time.
+        self.continue_until = None
         self.navigation_controller = None
         self.last_presence = 0.
         self.library = RunLibrary(runs_dirs)
+        self.voice_available = voice.available()
         self.model_settings = dict(model_settings.DEFAULTS)
         self.models = model_settings.ModelLibrary()
         self.model_load = {'state': 'idle', 'detail': 'Models load on connection to Spot'}
@@ -285,6 +292,7 @@ class Workspace:
                     'model_load': dict(self.model_load),
                     'login': dict(self.login),
                     'navigation_active': self.navigation_controller is not None,
+                    'voice_available': self.voice_available,
                     'recording': self.recorder.status() if self.recorder else None}
 
     def image(self, name):
@@ -333,6 +341,8 @@ class Workspace:
                 self.epoch += 1
                 self.revision += 1
                 self.query_key = None
+                self.command = None
+                self.continue_until = None
                 self.invalidation.clear()
                 self.cached = {}
                 self.images = {}
@@ -408,6 +418,7 @@ class Workspace:
 
     def _action(self, name, data, epoch):
         if name == 'invalidate':
+            self.continue_until = None
             if self.interaction:
                 self.interaction.stop()
             return
@@ -432,6 +443,7 @@ class Workspace:
                 raise ValueError('Robot control requires a new connection with command authority')
             self.control.stop()
             self.invalidation.clear()
+            self.continue_until = None
             if self.interaction:
                 self.interaction.stop()
             self.mode = mode
@@ -470,25 +482,39 @@ class Workspace:
         if name in ('select', 'confirm', 'reject', 'preview', 'go'):
             if data.get('revision') != self.revision:
                 raise ValueError('Target selection changed; inspect the current evidence first')
+        self.continue_until = None
         if name == 'query':
             phrase = data.get('phrase', '').strip()
             if not phrase or len(phrase) > 160:
                 raise ValueError('Enter an object phrase of 1–160 characters')
-            result = b.query(phrase)
-            session.offer(result if b.mode == 'SIMULATED' else [], ambiguous=b.mode == 'SIMULATED' and len(result) > 1)
-            if b.mode != 'SIMULATED':
-                session.message = 'PENDING · local visual query'
+            parsed = parse_command(phrase)
+            if parsed.action != Action.FIND:
+                raise ValueError(f'"{phrase}" is a {parsed.action.value} command; '
+                                 'use its button or push-to-talk')
+            session.set_relation(parsed.relation)
+            self.command = {'text': phrase, 'target': parsed.target,
+                            'relation': parsed.relation.value, 'pointing': parsed.pointing,
+                            'source': data.get('source') if data.get('source') == 'voice' else 'typed'}
+            if parsed.pointing:
+                self._point(b, session)
+            else:
+                result = b.query(parsed.target)
+                session.offer(result if b.mode == 'SIMULATED' else [], ambiguous=b.mode == 'SIMULATED' and len(result) > 1)
+                if b.mode != 'SIMULATED':
+                    session.message = 'PENDING · local visual query'
             self.query_key = None
         elif name == 'point':
-            candidates, unresolved = b.pointing()
-            session.offer(candidates, ambiguous=unresolved)
-            if unresolved:
-                session.message = 'Pointing unresolved; inspect evidence or type a target'
+            session.set_relation(Relation.FRONT)
+            self.command = None
+            self._point(b, session)
         elif name == 'select':
             entity_id = data.get('entity_id')
             if any(c.entity_id == entity_id for c in session.candidates):
                 session.select(entity_id)
             else:
+                # A target picked directly carries no side from an earlier command.
+                session.set_relation(Relation.FRONT)
+                self.command = None
                 session.offer([b.direct(entity_id)])
         elif name == 'confirm':
             session.confirm()
@@ -518,6 +544,7 @@ class Workspace:
             finally:
                 session.executor = executor
             self.message = result
+            self._continue_after(result)
         elif name == 'camera':
             if b.mode == 'SIMULATED':
                 raise ValueError('Synthetic camera policy is fixed')
@@ -657,6 +684,40 @@ class Workspace:
                     self.model_load = status
         threading.Thread(target=load, name='scope-model-load', daemon=True).start()
 
+    def _point(self, b, session):
+        candidates, unresolved = b.pointing()
+        session.offer(candidates, ambiguous=unresolved)
+        if unresolved:
+            session.message = 'Pointing unresolved; inspect evidence or type a target'
+
+    def _continue_after(self, result):
+        """A LEG or LOOK arrival previews the next leg; GO is still required."""
+        leg = self.interaction.last_dispatch if self.interaction else None
+        if (leg is not None and leg.purpose != 'ARRIVE' and isinstance(result, str) and
+                result.startswith(('ARRIVED', 'SIMULATED_ARRIVAL'))):
+            self.continue_until = time.monotonic() + 12.
+            self.message = 'Leg done; mapping and planning the next leg'
+
+    def _continue_preview(self):
+        b, session = self.backend, self.interaction
+        if (self.continue_until is None or self.navigation_controller is not None or
+                b is None or b.robot is None):
+            return
+        if self.mode == 'observe' or session.confirmed is None or session.proposal is not None:
+            self.continue_until = None
+            return
+        try:
+            self._mapping_enabled()
+            p = session.propose(b.robot, b.mapping)
+        except (InteractionError, ValueError) as exc:
+            if time.monotonic() > self.continue_until:
+                self.continue_until = None
+                self.message = f'Next leg not planned: {exc}'
+            return
+        self.continue_until = None
+        self.message = ('Final leg previewed; GO when ready' if p.purpose == 'ARRIVE'
+                        else 'Next leg previewed; GO when ready')
+
     def _mapping_enabled(self):
         b = self.backend
         if b.mode != 'SIMULATED' and (b.pipeline is None or
@@ -691,12 +752,17 @@ class Workspace:
                         session.offer(candidates, ambiguous=len(candidates) > 1)
                         self.revision += 1
             execution = b.execution_status()
+            previous, self.last_execution = self.last_execution, execution
             if execution and execution != 'IDLE':
-                self.message = execution
+                if execution != previous:
+                    self.message = execution
                 if not execution.startswith('MOVING'):
+                    if self.navigation_controller is not None:
+                        self._continue_after(execution)
                     self.navigation_controller = None
             if b.error:
                 self.message = b.error
+        self._continue_preview()
         self._publish()
         self._sample_recording()
 
@@ -720,6 +786,8 @@ class Workspace:
             'entities': b.entities, 'candidates': [candidate(item) for item in session.candidates],
             'selected': candidate(c) if c else None, 'confirmed': session.confirmed is not None,
             'destination': asdict(p) if p else None,
+            'command': self.command, 'relation': session.relation.value,
+            'continuing': self.continue_until is not None,
             'can_confirm': fresh and session.confirmed is None,
             'can_go': (fresh and p is not None and 0 <= now-p.proposed_host_s <= 10 and
                        self.mode != 'observe' and not self.control.failed),

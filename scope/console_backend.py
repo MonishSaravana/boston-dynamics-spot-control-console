@@ -19,33 +19,100 @@ from .runtime import ModuleConfig
 from .semantic_query import SemanticQuery
 from .spot_live_source import rotate_frame, upright_quarter_turns
 from .interaction import TextCommand
-from .synthetic import SyntheticRoom, look_at, render, room_boxes
+from .synthetic import Box, SyntheticRoom, look_at, render
 
 
-def _demo_map():
-    mapping = VoxelMap(MapConfig((-3., -3., 0.), (60, 60, 20), .1))
-    mapping.frees[:] = 1
-    cfg = mapping.config
-    for box in room_boxes():
+LIVE_MAP_PAD_M = 3.0
+
+
+DEMO_ROOM_M = 8.
+DEMO_MAP = MapConfig((-4.4, -4.4, 0.), (88, 88, 20), .1)
+
+
+def demo_room():
+    """An 8 m room with space for Spot to walk around and behind furniture."""
+    h = DEMO_ROOM_M / 2
+    boxes = [
+        Box("floor", (-h, -h, -.10), (h, h, 0), (125, 132, 139)),
+        Box("north wall", (-h, h-.08, 0), (h, h, 2.65), (199, 208, 216)),
+        Box("south wall", (-h, -h, 0), (h, -h+.08, 2.65), (205, 211, 214)),
+        Box("west wall", (-h, -h, 0), (-h+.08, h, 2.65), (179, 194, 204)),
+        Box("east wall", (h-.08, -h, 0), (h, h, 2.65), (179, 194, 204)),
+        Box("couch seat", (-.95, .55, 0), (.95, 1.45, .45), (92, 104, 140)),
+        Box("couch back", (-.95, 1.25, .45), (.95, 1.45, .85), (74, 86, 122)),
+        Box("table top", (1.50, -2.60, .76), (2.50, -1.75, .84), (160, 104, 63)),
+        Box("table left leg", (1.53, -2.57, 0), (1.60, -2.50, .77), (116, 76, 50)),
+        Box("table right leg", (2.40, -1.85, 0), (2.47, -1.78, .77), (116, 76, 50)),
+        Box("chair A seat", (-3.30, -.60, .42), (-2.70, -.03, .50), (55, 145, 187)),
+        Box("chair A back", (-3.30, -.11, .42), (-2.70, -.03, 1.16), (43, 115, 160)),
+        Box("chair B seat", (2.50, 2.30, .42), (3.10, 2.87, .50), (221, 155, 58)),
+        Box("chair B back", (2.50, 2.79, .42), (3.10, 2.87, 1.16), (188, 113, 44)),
+        Box("backpack", (2.90, -.40, 0), (3.29, -.10, .48), (164, 62, 90)),
+    ]
+    for x0, y0, color in ((-3.30, -.60, (35, 96, 135)), (2.50, 2.30, (149, 89, 36))):
+        for x in (x0+.05, x0+.49):
+            for y in (y0+.04, y0+.47):
+                boxes.append(Box("chair leg", (x, y, 0), (x+.06, y+.06, .43), color))
+    return tuple(boxes)
+
+
+def _demo_truth():
+    """Occupied voxels of the demo room, before the robot has seen them."""
+    cfg = DEMO_MAP
+    hits = np.zeros(cfg.shape, dtype=np.uint16)
+    for box in demo_room():
         if box.name == "floor":
             continue
         lo = np.maximum(0, np.floor((np.asarray(box.low)-cfg.origin)/cfg.voxel_m).astype(int))
         hi = np.minimum(np.asarray(cfg.shape), np.ceil((np.asarray(box.high)-cfg.origin)/cfg.voxel_m).astype(int))
-        mapping.hits[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]] = 1
+        hits[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]] = 1
+    return cfg, hits
+
+
+def reveal_from(mapping, truth_hits, xy, range_m=6., rays=720):
+    """Mark what a 360-degree sensor at xy would see; shadows behind objects stay unknown."""
+    cfg = mapping.config
+    z = np.arange(cfg.shape[2]) * cfg.voxel_m + cfg.origin[2]
+    slab = truth_hits[:, :, (z >= .25) & (z <= 1.55)].any(axis=2)
+    origin = np.asarray(cfg.origin[:2])
+    steps = np.arange(0., range_m, cfg.voxel_m / 2)
+    for angle in np.linspace(0, 2*math.pi, rays, endpoint=False):
+        points = np.asarray(xy)[None, :] + steps[:, None] * [math.cos(angle), math.sin(angle)]
+        ij = np.floor((points - origin) / cfg.voxel_m).astype(int)
+        inside = ((ij >= 0) & (ij < cfg.shape[:2])).all(axis=1)
+        for i, j in ij[inside]:
+            mapping.hits[i, j] = truth_hits[i, j]
+            if slab[i, j]:
+                break
+            mapping.frees[i, j] = 1
+    mapping.revision += 1
+
+
+def _demo_map():
+    cfg, hits = _demo_truth()
+    mapping = VoxelMap(cfg)
+    mapping.frees[:] = 1
+    mapping.hits[:] = hits
     mapping.revision = 1
     mapping.world_frame = "simulated-world"
     return mapping
 
 
 def _demo_entities():
-    definitions = (
-        ("chair_a", "chair", (-1.31, -.13, 0.), (-.69, .48, 1.17)),
-        ("chair_b", "chair", (.71, -.03, 0.), (1.33, .58, 1.17)),
-        ("table", "table", (-.46, .54, 0.), (.56, 1.41, .85)),
-        ("backpack", "backpack", (.80, .68, 0.), (1.21, 1.0, .49)))
-    return [{"entity_id": key, "label": label, "bounds_low_m": list(low),
-             "bounds_high_m": list(high), "confidence": 1.0, "last_seen_s": None}
-            for key, label, low, high in definitions]
+    groups = {"chair_a": ("chair", "chair A"), "chair_b": ("chair", "chair B"),
+              "table": ("table", "table"), "backpack": ("backpack", "backpack"),
+              "couch": ("couch", "couch")}
+    boxes = demo_room()
+    result = []
+    for key, (label, prefix) in groups.items():
+        parts = [b for b in boxes if b.name.startswith(prefix)]
+        low = np.min([b.low for b in parts], axis=0)
+        high = np.max([b.high for b in parts], axis=0)
+        result.append({"entity_id": key, "label": label,
+                       "bounds_low_m": [round(float(v), 2) for v in low],
+                       "bounds_high_m": [round(float(v), 2) for v in high],
+                       "confidence": 1.0, "last_seen_s": None})
+    return result
 
 
 class DemoBackend:
@@ -54,11 +121,16 @@ class DemoBackend:
 
     def __init__(self):
         room = SyntheticRoom(frames=1, width=320, height=240)
-        self.K, self.boxes = room.K, room.boxes
-        self.mapping = _demo_map()
+        self.K, self.boxes = room.K, demo_room()
         self.entities = _demo_entities()
         self.executor = VirtualExecutor()
-        self.robot = RobotPose(-1.75, -1.45, .25, time.monotonic(), self.world_frame)
+        self.robot = RobotPose(-1.5, -2.5, .9, time.monotonic(), self.world_frame)
+        # Only what the virtual robot has seen is mapped, so routes behind
+        # objects need a look first, as they would on Spot.
+        config, self._truth = _demo_truth()
+        self.mapping = VoxelMap(config)
+        self.mapping.world_frame = self.world_frame
+        reveal_from(self.mapping, self._truth, (self.robot.x_m, self.robot.y_m))
         self.frame = None
         self._rendered_pose = None
         self.camera_status = {"synthetic-front": {"health": "OK", "acquired": True,
@@ -74,8 +146,11 @@ class DemoBackend:
                                  frame_id=f"demo:{now:.3f}")
             self.robot = replace(self.robot, observed_host_s=now)
             return self.frame
+        if self._rendered_pose is not None and pose[:2] != self._rendered_pose[:2]:
+            reveal_from(self.mapping, self._truth, pose[:2])
         eye = np.array([self.robot.x_m, self.robot.y_m, 1.35])
-        T = look_at(eye, np.array([0., .35, .83]))
+        heading = np.array([math.cos(self.robot.yaw_rad), math.sin(self.robot.yaw_rad), -.35])
+        T = look_at(eye, eye + heading)
         start = time.perf_counter()
         rgb, depth = render(self.boxes, self.K, T)
         self.timings["sensor_simulation_ms"] = (time.perf_counter()-start)*1000
@@ -87,8 +162,8 @@ class DemoBackend:
 
     def query(self, phrase):
         query = SemanticQuery.from_command(TextCommand(phrase))
-        label = query.entity_label.split()[-1]
-        matches = [e for e in self.entities if e["label"] == label]
+        labels = {phrase.split()[-1] for phrase in query.alternatives}
+        matches = [e for e in self.entities if e["label"] in labels]
         now = time.monotonic()
         return [replace(direct_candidate(e, now, self.world_frame),
                         source=SelectionSource.QUERY,
@@ -213,7 +288,9 @@ class SpotBackend:
 
     def _init_pipeline(self, frame, has_geometry):
         from .model_settings import REFRESH_S, query_factory, segmenter_factory
-        config = MapConfig.around_frames([frame]) if has_geometry else MapConfig.synthetic()
+        # Room beyond the first view, so routes can go around objects and behind them.
+        config = (MapConfig.around_frames([frame], pad_xy_m=LIVE_MAP_PAD_M) if has_geometry
+                  else MapConfig.synthetic())
         configs = {"mapping": ModuleConfig(enabled=has_geometry, max_hz=5),
                    "human_pose": ModuleConfig(enabled=self.human_pose, max_hz=3),
                    "object_detector": ModuleConfig(enabled=False),

@@ -28,6 +28,8 @@ CAMERAS = ('frontleft_fisheye_image', 'frontright_fisheye_image',
 DRIVE_KEYS = frozenset('wasd')
 DRIVE_TIMEOUT = 0.30
 MAX_BODY = 4096
+# Push-to-talk audio: 16 kHz mono 16-bit PCM, at most 15 s.
+VOICE_MAX_BODY = 16000 * 2 * 15
 
 
 def jpeg_bytes(picture):
@@ -57,6 +59,8 @@ class WebSignals:
 
 class WebControl:
     def __init__(self, demo=False, runs_dirs=None):
+        from scope.voice import Transcriber
+        self.voice = Transcriber()
         self.demo = demo
         self.lock = threading.RLock()
         self.command_lock = threading.RLock()
@@ -694,10 +698,35 @@ class Handler(BaseHTTPRequestHandler):
                                     'source_note': model_settings.SOURCE_NOTE})
         return self._json(404, {'error': 'Not found'})
 
+    def _voice(self):
+        from scope.commands import parse_command
+        try:
+            if self.headers.get('Content-Type') != 'application/octet-stream':
+                raise ValueError('Expected 16 kHz mono 16-bit audio')
+            length = int(self.headers.get('Content-Length', '0'))
+            if length <= 0 or length > VOICE_MAX_BODY:
+                raise ValueError('Recording empty or longer than 15 s')
+            text = self.app.voice.transcribe(self.rfile.read(length))
+            if not text:
+                raise ValueError('No words recognised; try again')
+            try:
+                parsed = parse_command(text)
+            except ValueError:
+                parsed = None
+            return self._json(200, {'text': text, 'command': None if parsed is None else {
+                'action': parsed.action.value, 'target': parsed.target,
+                'relation': parsed.relation.value, 'pointing': parsed.pointing}})
+        except (ValueError, TypeError) as exc:
+            return self._json(400, {'error': str(exc)})
+        except Exception:
+            return self._json(500, {'error': 'Transcription failed'})
+
     def do_POST(self):
         if not self._valid_host() or self.headers.get('Origin') != f'http://{self.headers.get("Host")}' or \
                 self.headers.get('X-SCOPE-Token') != self.app.token:
             return self._json(403, {'error': 'Invalid local session'})
+        if urlsplit(self.path).path == '/api/voice':
+            return self._voice()
         try:
             length = int(self.headers.get('Content-Length', '0'))
             if length < 0 or length > MAX_BODY:
