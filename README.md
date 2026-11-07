@@ -21,50 +21,19 @@ This is an independent project, not a Boston Dynamics product, and nothing here 
 
 Physical validation on Spot is still open; [the M5 checklist](docs/milestone-5.md) lists what has to pass first.
 
-## How it fits together
+## How "go behind the couch" works
 
 ```mermaid
-flowchart TB
-    op([Operator]) -- "keys, clicks, voice" --> ui
-    subgraph laptop["Laptop"]
-        ui["Browser UI"] -- "HTTP, 127.0.0.1 only" --> srv["Local server<br/>scope_web.py"]
-        srv --> stt["Whisper<br/>speech to text"]
-        srv --> ws["Workspace<br/>targets, previews, GO"]
-        ws --> cmd["Command rules<br/>no LLM"]
-        ws --> per["Object finder<br/>Grounding DINO + OWLv2"]
-        per --> map["3D map<br/>free / occupied / unknown"]
-        map --> plan["Route planner"]
-        ws --> plan
-        plan --> go["Supervised GO<br/>short legs"]
-    end
-    estop["E-stop window<br/>separate process"]
-    go -- "trajectory commands" --> spot[("Spot")]
-    srv -- "drive, power, stand" --> spot
-    spot -- "images, depth, odometry" --> per
-    estop -- "class E-stop" --> spot
+flowchart LR
+    A["🎙 Whisper<br/>speech → text"] --> B["Rule parser<br/>couch + behind"]
+    B --> C["Grounding DINO + OWLv2<br/>find it in the image"]
+    C --> D["RGB-D voxel map<br/>free · occupied · unknown"]
+    D --> E["Dijkstra planner<br/>footprint-aware"]
+    E --> F["Supervised GO<br/>≤ 2.4 m legs"]
+    F -. "walk, re-map, re-plan" .-> D
 ```
 
-The browser never talks to the robot directly. Everything goes through one local server bound to `127.0.0.1`, and one worker thread owns target selection and GO, so two tabs cannot race each other. The class E-stop is the SDK's own `estop_nogui.py` in its own terminal window. Closing SCOPE does not take it away.
-
-## What happens when you say "go behind the couch"
-
-```mermaid
-flowchart TD
-    a["'go behind the couch'"] --> b["Parser: object = couch, side = behind"]
-    b --> c["Detector finds the couch;<br/>depth gives a 3D box"]
-    c --> d{"You confirm<br/>the target"}
-    d --> e{"Is the spot behind it<br/>mapped as free?"}
-    e -- yes --> f["Plan a route around obstacles"]
-    e -- "not yet" --> g["Plan a route to a spot<br/>that can see it"]
-    f --> h{"Longer than 2.4 m?"}
-    g --> h
-    h -- yes --> i["Cut it: this GO walks the first 2.4 m"]
-    h -- no --> j["This GO is the final leg"]
-    i --> k["You press GO"]
-    j --> k
-    k --> l["Spot walks; the map updates"]
-    l -- "not there yet" --> e
-```
+If the area behind the couch hasn't been seen yet, the first leg walks to a spot that can see it. The map fills in and the next leg is planned from there.
 
 Three things keep this predictable:
 
