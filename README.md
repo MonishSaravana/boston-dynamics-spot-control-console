@@ -24,21 +24,24 @@ Physical validation on Spot is still open; [the M5 checklist](docs/milestone-5.m
 ## How it fits together
 
 ```mermaid
-flowchart LR
-    op([Operator]) -- "keys, clicks, voice" --> ui["Browser UI<br/>web/*.js"]
-    ui -- "HTTP on 127.0.0.1<br/>+ session token" --> srv["scope_web.py<br/>local server"]
-    srv --> ws["Workspace<br/>one worker owns targets and GO"]
-    srv --> stt["Whisper<br/>speech to text"]
-    ws --> cmd["Command parser<br/>fixed rules, no LLM"]
-    ws --> per["Perception<br/>Grounding DINO + OWLv2"]
-    per --> map["3D voxel map<br/>free / occupied / unknown"]
-    ws --> plan["Route planner<br/>shortest path over seen-free cells"]
-    map --> plan
-    plan --> go["Supervised GO<br/>short legs, 0.75 s command expiry"]
-    go -- "Spot SDK" --> spot[("Spot")]
-    srv -- "manual drive, power, stand" --> spot
+flowchart TB
+    op([Operator]) -- "keys, clicks, voice" --> ui
+    subgraph laptop["Laptop"]
+        ui["Browser UI"] -- "HTTP, 127.0.0.1 only" --> srv["Local server<br/>scope_web.py"]
+        srv --> stt["Whisper<br/>speech to text"]
+        srv --> ws["Workspace<br/>targets, previews, GO"]
+        ws --> cmd["Command rules<br/>no LLM"]
+        ws --> per["Object finder<br/>Grounding DINO + OWLv2"]
+        per --> map["3D map<br/>free / occupied / unknown"]
+        map --> plan["Route planner"]
+        ws --> plan
+        plan --> go["Supervised GO<br/>short legs"]
+    end
+    estop["E-stop window<br/>separate process"]
+    go -- "trajectory commands" --> spot[("Spot")]
+    srv -- "drive, power, stand" --> spot
     spot -- "images, depth, odometry" --> per
-    estop["E-stop window<br/>separate process"] -- "class E-stop" --> spot
+    estop -- "class E-stop" --> spot
 ```
 
 The browser never talks to the robot directly. Everything goes through one local server bound to `127.0.0.1`, and one worker thread owns target selection and GO, so two tabs cannot race each other. The class E-stop is the SDK's own `estop_nogui.py` in its own terminal window. Closing SCOPE does not take it away.
