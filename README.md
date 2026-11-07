@@ -25,7 +25,7 @@ Physical validation on Spot is still open; [the M5 checklist](docs/milestone-5.m
 
 ```mermaid
 flowchart LR
-    A["🎙 Whisper<br/>speech → text"] --> B["Rule parser<br/>couch + behind"]
+    A["Whisper<br/>speech → text"] --> B["Rule parser<br/>couch + behind"]
     B --> C["Grounding DINO + OWLv2<br/>find it in the image"]
     C --> D["RGB-D voxel map<br/>free · occupied · unknown"]
     D --> E["Dijkstra planner<br/>footprint-aware"]
